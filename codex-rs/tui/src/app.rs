@@ -11,17 +11,18 @@ use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::HistoryLookupResponse;
 use crate::app_event::PermissionProfileSelection;
-use crate::app_event::PluginLocation;
-use crate::app_event::PluginRemoteSectionError;
 use crate::app_event::RateLimitRefreshOrigin;
+use crate::app_event::RealtimeAudioDeviceKind;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
+use crate::app_server_session::account_state_from_get_account_response;
 use crate::app_server_session::AppServerBootstrap;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::TurnPermissionsOverride;
 use crate::app_server_session::app_server_rate_limit_snapshots;
+use crate::auth_watch::AuthWatch;
 use crate::bottom_pane::AppLinkViewParams;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::FeedbackAudience;
@@ -37,6 +38,8 @@ use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::split_command_string;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::external_agent_config_migration_startup::ExternalAgentConfigMigrationStartupOutcome;
+use crate::external_agent_config_migration_startup::handle_external_agent_config_migration_prompt_if_needed;
 use crate::external_editor;
 use crate::file_search::FileSearchManager;
 use crate::history_cell;
@@ -51,6 +54,8 @@ use crate::legacy_core::config::ConfigBuilder;
 use crate::legacy_core::config::ConfigOverrides;
 use crate::legacy_core::config::PermissionProfileSnapshot;
 use crate::legacy_core::config::edit::ConfigEditsBuilder;
+#[cfg(target_os = "windows")]
+use crate::legacy_core::windows_sandbox::WindowsSandboxLevelExt;
 use crate::model_catalog::ModelCatalog;
 use crate::model_migration::ModelMigrationOutcome;
 use crate::model_migration::migration_copy_for_models;
@@ -59,13 +64,13 @@ use crate::multi_agents::agent_picker_status_dot_spans;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::next_agent_shortcut_matches;
 use crate::multi_agents::previous_agent_shortcut_matches;
-use crate::multi_agents::sub_agent_activity_display;
 use crate::pager_overlay::Overlay;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
 use crate::session_state::ThreadSessionState;
+use crate::status::StatusAccountDisplay;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -105,14 +110,13 @@ use codex_app_server_protocol::McpServerStatusDetail;
 use codex_app_server_protocol::MergeStrategy;
 use codex_app_server_protocol::PluginInstallParams;
 use codex_app_server_protocol::PluginInstallResponse;
-use codex_app_server_protocol::PluginListMarketplaceKind;
 use codex_app_server_protocol::PluginListParams;
 use codex_app_server_protocol::PluginListResponse;
-use codex_app_server_protocol::PluginMarketplaceEntry;
 use codex_app_server_protocol::PluginReadParams;
 use codex_app_server_protocol::PluginReadResponse;
 use codex_app_server_protocol::PluginUninstallParams;
 use codex_app_server_protocol::PluginUninstallResponse;
+use codex_app_server_protocol::RateLimitSnapshot;
 use codex_app_server_protocol::SandboxMode as AppServerSandboxMode;
 use codex_app_server_protocol::SendAddCreditsNudgeEmailParams;
 use codex_app_server_protocol::ServerNotification;
@@ -129,7 +133,6 @@ use codex_app_server_protocol::Turn;
 use codex_app_server_protocol::TurnError as AppServerTurnError;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::WriteStatus;
-use codex_config::CloudConfigBundleLoader;
 use codex_config::ConfigLayerStackOrdering;
 use codex_config::LoaderOverrides;
 use codex_config::types::ApprovalsReviewer;
@@ -145,8 +148,8 @@ use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
 use codex_models_manager::model_presets::HIDE_GPT5_1_MIGRATION_PROMPT_CONFIG;
 use codex_otel::SessionTelemetry;
-use codex_otel::TelemetryAuthMode;
 use codex_protocol::ThreadId;
+use codex_protocol::account::PlanType;
 use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
@@ -198,7 +201,6 @@ use toml::Value as TomlValue;
 use uuid::Uuid;
 mod agent_message_consolidation;
 mod agent_navigation;
-mod agent_status_feed;
 mod app_server_event_targets;
 mod app_server_events;
 pub(crate) mod app_server_requests;
@@ -262,20 +264,6 @@ fn collab_receiver_thread_ids(notification: &ServerNotification) -> Option<&[Str
                 receiver_thread_ids,
                 ..
             } => Some(receiver_thread_ids),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-fn sub_agent_activity_item(notification: &ServerNotification) -> Option<&ThreadItem> {
-    match notification {
-        ServerNotification::ItemStarted(notification) => match &notification.item {
-            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
-            _ => None,
-        },
-        ServerNotification::ItemCompleted(notification) => match &notification.item {
-            ThreadItem::SubAgentActivity { .. } => Some(&notification.item),
             _ => None,
         },
         _ => None,
@@ -399,7 +387,7 @@ const COMMIT_ANIMATION_TICK: Duration = tui::TARGET_FRAME_INTERVAL;
 pub struct AppExitInfo {
     pub token_usage: TokenUsage,
     pub thread_id: Option<ThreadId>,
-    pub resume_hint: Option<String>,
+    pub thread_name: Option<String>,
     pub update_action: Option<UpdateAction>,
     pub exit_reason: ExitReason,
 }
@@ -409,7 +397,7 @@ impl AppExitInfo {
         Self {
             token_usage: TokenUsage::default(),
             thread_id: None,
-            resume_hint: None,
+            thread_name: None,
             update_action: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
@@ -435,7 +423,10 @@ fn session_summary(
     rollout_path: Option<&Path>,
 ) -> Option<SessionSummary> {
     let usage_line = (!token_usage.is_zero()).then(|| token_usage.to_string());
-    let resume_hint = resume_hint_for_resumable_thread(thread_id, thread_name, rollout_path);
+    let resumable_thread = resumable_thread(thread_id, thread_name, rollout_path);
+    let resume_hint = resumable_thread.as_ref().and_then(|thread| {
+        codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
+    });
 
     if usage_line.is_none() && resume_hint.is_none() {
         return None;
@@ -464,15 +455,6 @@ fn resumable_thread(
         thread_id,
         thread_name,
     })
-}
-
-fn resume_hint_for_resumable_thread(
-    thread_id: Option<ThreadId>,
-    thread_name: Option<String>,
-    rollout_path: Option<&Path>,
-) -> Option<String> {
-    let thread = resumable_thread(thread_id, thread_name, rollout_path)?;
-    codex_utils_cli::resume_hint(thread.thread_name.as_deref(), Some(thread.thread_id))
 }
 
 fn rollout_path_is_resumable(rollout_path: &Path) -> bool {
@@ -506,13 +488,13 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    _auth_watch: Option<AuthWatch>,
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
     pub(crate) state_db: Option<StateDbHandle>,
     cli_kv_overrides: Vec<(String, TomlValue)>,
     harness_overrides: ConfigOverrides,
     loader_overrides: LoaderOverrides,
-    cloud_config_bundle: CloudConfigBundleLoader,
     runtime_approval_policy_override: Option<AskForApproval>,
     runtime_permission_profile_override: Option<RuntimePermissionProfileOverride>,
 
@@ -567,6 +549,7 @@ pub(crate) struct App {
 
     thread_event_channels: HashMap<ThreadId, ThreadEventChannel>,
     thread_event_listener_tasks: HashMap<ThreadId, JoinHandle<()>>,
+    rate_limit_poll_task: Option<JoinHandle<()>>,
     agent_navigation: AgentNavigationState,
     side_threads: HashMap<ThreadId, SideThreadState>,
     active_thread_id: Option<ThreadId>,
@@ -703,26 +686,139 @@ fn archived_session_guidance(err: &color_eyre::eyre::Report) -> Option<String> {
     Some(message.to_string())
 }
 
-fn active_turn_interrupt_race(error: &TypedRequestError) -> Option<String> {
-    let TypedRequestError::Server { method, source } = error else {
-        return None;
-    };
-    if method != "turn/interrupt" {
-        return None;
+const AUTH_RELOAD_RETRY_DELAY: Duration = Duration::from_secs(5);
+const AUTH_RELOAD_MAX_ATTEMPTS: u8 = 3;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthIdentity {
+    email: Option<String>,
+    plan_type: Option<PlanType>,
+    has_chatgpt_account: bool,
+}
+
+impl AuthIdentity {
+    fn from_chat_widget(chat_widget: &ChatWidget) -> Self {
+        let email = match chat_widget.status_account_display() {
+            Some(StatusAccountDisplay::ChatGpt { email, .. }) => email.clone(),
+            Some(StatusAccountDisplay::ApiKey) | None => None,
+        };
+        Self {
+            email,
+            plan_type: chat_widget.current_plan_type(),
+            has_chatgpt_account: chat_widget.has_chatgpt_account(),
+        }
     }
-    let mismatch_prefix = "expected active turn id ";
-    let mismatch_separator = " but found ";
-    Some(
-        source
-            .message
-            .strip_prefix(mismatch_prefix)?
-            .split_once(mismatch_separator)?
-            .1
-            .to_string(),
+
+    fn from_parts(
+        status_account_display: &Option<StatusAccountDisplay>,
+        plan_type: Option<PlanType>,
+        has_chatgpt_account: bool,
+    ) -> Self {
+        let email = match status_account_display {
+            Some(StatusAccountDisplay::ChatGpt { email, .. }) => email.clone(),
+            Some(StatusAccountDisplay::ApiKey) | None => None,
+        };
+        Self {
+            email,
+            plan_type,
+            has_chatgpt_account,
+        }
+    }
+
+    fn display_label(&self) -> String {
+        if !self.has_chatgpt_account {
+            return "API key".to_string();
+        }
+        let email = self.email.as_deref().unwrap_or("unknown email");
+        let plan = self
+            .plan_type
+            .map(crate::status::plan_type_display_name)
+            .unwrap_or_else(|| "unknown plan".to_string());
+        format!("{email} ({plan})")
+    }
+}
+
+fn auth_change_message(previous: &AuthIdentity, next: &AuthIdentity) -> String {
+    format!(
+        "Account changed from {} to {}.",
+        previous.display_label(),
+        next.display_label()
     )
 }
 
 impl App {
+    fn stop_rate_limit_polling(&mut self) {
+        if let Some(task) = self.rate_limit_poll_task.take() {
+            task.abort();
+        }
+    }
+
+    fn schedule_auth_reload_retry(&self, attempt: u8) {
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(AUTH_RELOAD_RETRY_DELAY).await;
+            app_event_tx.send(AppEvent::AuthFileChangedRetry { attempt });
+        });
+    }
+
+    pub(crate) async fn handle_auth_file_changed(
+        &mut self,
+        app_server: &mut AppServerSession,
+        attempt: u8,
+    ) {
+        if self.chat_widget.is_task_running() {
+            self.chat_widget.defer_auth_reload_until_idle(attempt);
+            return;
+        }
+
+        let previous_identity = AuthIdentity::from_chat_widget(&self.chat_widget);
+        match app_server.reload_account_from_storage().await {
+            Ok(account) => {
+                let (status_account_display, plan_type, has_chatgpt_account) =
+                    account_state_from_get_account_response(&account);
+                let next_identity = AuthIdentity::from_parts(
+                    &status_account_display,
+                    plan_type,
+                    has_chatgpt_account,
+                );
+                let identity_changed = previous_identity != next_identity;
+                self.chat_widget.update_account_state(
+                    status_account_display,
+                    plan_type,
+                    has_chatgpt_account,
+                );
+                if identity_changed {
+                    self.chat_widget.handle_auth_identity_changed();
+                    self.chat_widget
+                        .add_to_history(history_cell::new_warning_event(auth_change_message(
+                            &previous_identity,
+                            &next_identity,
+                        )));
+                }
+                self.chat_widget.on_auth_reload_completed(identity_changed);
+                if has_chatgpt_account {
+                    self.start_rate_limit_polling(app_server);
+                    self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::StartupPrefetch);
+                } else {
+                    self.stop_rate_limit_polling();
+                    self.chat_widget.on_rate_limit_snapshot(None);
+                }
+            }
+            Err(err) => {
+                if attempt < AUTH_RELOAD_MAX_ATTEMPTS {
+                    self.schedule_auth_reload_retry(attempt.saturating_add(1));
+                    return;
+                }
+                tracing::warn!(%err, "failed to reload auth from storage");
+                self.chat_widget
+                    .on_auth_reload_completed(/*identity_changed*/ false);
+                self.chat_widget.add_to_history(history_cell::new_warning_event(
+                    "Failed to reload auth after auth.json changed.".to_string(),
+                ));
+            }
+        }
+    }
+
     pub fn chatwidget_init_for_forked_or_resumed_thread(
         &self,
         tui: &mut tui::Tui,
@@ -737,7 +833,6 @@ impl App {
             initial_user_message,
             enhanced_keys_supported: self.enhanced_keys_supported,
             has_chatgpt_account: self.chat_widget.has_chatgpt_account(),
-            has_codex_backend_auth: self.chat_widget.has_codex_backend_auth(),
             model_catalog: self.model_catalog.clone(),
             feedback: self.feedback.clone(),
             is_first_run: false,
@@ -763,12 +858,12 @@ impl App {
         cli_kv_overrides: Vec<(String, TomlValue)>,
         harness_overrides: ConfigOverrides,
         loader_overrides: LoaderOverrides,
-        cloud_config_bundle: CloudConfigBundleLoader,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
         is_first_run: bool,
+        entered_trust_nux: bool,
         should_prompt_windows_sandbox_nux_at_startup: bool,
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
@@ -781,6 +876,12 @@ impl App {
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        let auth_watch = AuthWatch::start(config.codex_home.as_path(), app_event_tx.clone())
+            .map(Some)
+            .unwrap_or_else(|err| {
+                tracing::warn!(%err, "failed to watch auth.json for changes");
+                None
+            });
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
@@ -790,6 +891,38 @@ impl App {
 
         let harness_overrides =
             normalize_harness_overrides_for_cwd(harness_overrides, &config.cwd)?;
+        let external_agent_config_migration_outcome =
+            handle_external_agent_config_migration_prompt_if_needed(
+                tui,
+                &mut app_server,
+                &mut config,
+                &cli_kv_overrides,
+                &harness_overrides,
+                entered_trust_nux,
+            )
+            .await?;
+        let external_agent_config_migration_message = match external_agent_config_migration_outcome
+        {
+            ExternalAgentConfigMigrationStartupOutcome::Continue { success_message } => {
+                success_message
+            }
+            ExternalAgentConfigMigrationStartupOutcome::ExitRequested => {
+                app_server
+                    .shutdown()
+                    .await
+                    .inspect_err(|err| {
+                        tracing::warn!("app-server shutdown failed: {err}");
+                    })
+                    .ok();
+                return Ok(AppExitInfo {
+                    token_usage: TokenUsage::default(),
+                    thread_id: None,
+                    thread_name: None,
+                    update_action: None,
+                    exit_reason: ExitReason::UserRequested,
+                });
+            }
+        };
         let bootstrap = match startup_bootstrap {
             Some(bootstrap) => bootstrap,
             None => app_server.bootstrap(&config).await?,
@@ -826,7 +959,6 @@ impl App {
         let feedback_audience = bootstrap.feedback_audience;
         let auth_mode = bootstrap.auth_mode;
         let has_chatgpt_account = bootstrap.has_chatgpt_account;
-        let has_codex_backend_auth = matches!(auth_mode, Some(TelemetryAuthMode::Chatgpt));
         let requires_openai_auth = bootstrap.requires_openai_auth;
         let status_account_display = bootstrap.status_account_display.clone();
         let initial_plan_type = bootstrap.plan_type;
@@ -895,7 +1027,6 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -931,7 +1062,6 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -970,7 +1100,6 @@ impl App {
                     ),
                     enhanced_keys_supported,
                     has_chatgpt_account,
-                    has_codex_backend_auth,
                     model_catalog: model_catalog.clone(),
                     feedback: feedback.clone(),
                     is_first_run,
@@ -989,6 +1118,10 @@ impl App {
         };
         chat_widget.remote_connection = remote_connection;
         let thread_and_widget_ms = thread_and_widget_started_at.elapsed().as_millis();
+        if let Some(message) = external_agent_config_migration_message {
+            chat_widget.add_info_message(message, /*hint*/ None);
+        }
+
         chat_widget
             .maybe_prompt_windows_sandbox_enable(should_prompt_windows_sandbox_nux_at_startup);
 
@@ -1009,12 +1142,12 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
+            _auth_watch: auth_watch,
             config,
             state_db,
             cli_kv_overrides,
             harness_overrides,
             loader_overrides,
-            cloud_config_bundle,
             runtime_approval_policy_override: None,
             runtime_permission_profile_override: None,
             file_search,
@@ -1041,6 +1174,7 @@ See the Codex keymap documentation for supported actions and examples."
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            rate_limit_poll_task: None,
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
             active_thread_id: None,
@@ -1074,7 +1208,7 @@ See the Codex keymap documentation for supported actions and examples."
         #[cfg(target_os = "windows")]
         {
             let startup_permission_profile = app.config.permissions.effective_permission_profile();
-            let should_check = crate::windows_sandbox::level_from_config(&app.config)
+            let should_check = WindowsSandboxLevel::from_config(&app.config)
                 != WindowsSandboxLevel::Disabled
                 && managed_filesystem_sandbox_is_restricted(&startup_permission_profile)
                 && !app
@@ -1115,16 +1249,10 @@ See the Codex keymap documentation for supported actions and examples."
         );
         app.refresh_startup_skills(&app_server);
         // Kick off a non-blocking rate-limit prefetch so the first `/status`
-        // already has data and available reset credits can be surfaced, without
-        // delaying the initial frame render.
+        // already has data, without delaying the initial frame render.
         if requires_openai_auth && has_chatgpt_account {
-            let reset_hint_request_id = app.chat_widget.start_rate_limit_reset_startup_check();
-            app.refresh_rate_limits(
-                &app_server,
-                RateLimitRefreshOrigin::StartupPrefetch {
-                    reset_hint_request_id,
-                },
-            );
+            app.refresh_rate_limits(&app_server, RateLimitRefreshOrigin::StartupPrefetch);
+            app.start_rate_limit_polling(&app_server);
         }
 
         let mut listen_for_app_server_events = true;
@@ -1236,16 +1364,15 @@ See the Codex keymap documentation for supported actions and examples."
                 return Err(err);
             }
         };
-        let thread_id = app.chat_widget.thread_id().or(app.primary_thread_id);
-        let resume_hint = resume_hint_for_resumable_thread(
-            thread_id,
+        let resumable_thread = resumable_thread(
+            app.chat_widget.thread_id(),
             app.chat_widget.thread_name(),
             app.chat_widget.rollout_path().as_deref(),
         );
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
-            thread_id,
-            resume_hint,
+            thread_id: resumable_thread.as_ref().map(|thread| thread.thread_id),
+            thread_name: resumable_thread.and_then(|thread| thread.thread_name),
             update_action: app.pending_update_action,
             exit_reason,
         })
@@ -1257,8 +1384,14 @@ See the Codex keymap documentation for supported actions and examples."
         app_server: &mut AppServerSession,
         event: TuiEvent,
     ) -> Result<AppRunControl> {
-        if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled && matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
             self.handle_draw_pre_render(tui)?;
+        } else if matches!(event, TuiEvent::Draw | TuiEvent::Resize) {
+            let size = tui.terminal.size()?;
+            if size != tui.terminal.last_known_screen_size {
+                self.refresh_status_line();
+            }
         }
 
         if self.overlay.is_some() {
@@ -1290,7 +1423,8 @@ See the Codex keymap documentation for supported actions and examples."
                     }
                     // Allow widgets to process any pending timers before rendering.
                     self.chat_widget.pre_draw_tick();
-                    let rendered_area = self.render_chat_widget_frame(tui)?;
+                    let rendered_area =
+                        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
                     if self.chat_widget.ambient_pet_image_enabled() {
                         let terminal_size = tui.terminal.size()?;
                         let ambient_pet_area = Rect::new(
@@ -1329,30 +1463,50 @@ See the Codex keymap documentation for supported actions and examples."
     pub(super) fn show_shutdown_feedback(&mut self, tui: &mut tui::Tui) -> Result<()> {
         self.disable_ambient_pet_before_shutdown(tui)?;
         self.chat_widget.show_shutdown_in_progress();
-        self.handle_draw_pre_render(tui)?;
+        let terminal_resize_reflow_enabled = self.terminal_resize_reflow_enabled();
+        if terminal_resize_reflow_enabled {
+            self.handle_draw_pre_render(tui)?;
+        }
         self.chat_widget.pre_draw_tick();
-        self.render_chat_widget_frame(tui)?;
+        self.render_chat_widget_frame(tui, terminal_resize_reflow_enabled)?;
         Ok(())
     }
 
-    fn render_chat_widget_frame(&mut self, tui: &mut tui::Tui) -> Result<Rect> {
+    fn render_chat_widget_frame(
+        &mut self,
+        tui: &mut tui::Tui,
+        terminal_resize_reflow_enabled: bool,
+    ) -> Result<Rect> {
         let desired_height = self.chat_widget.desired_height(tui.terminal.size()?.width);
         let mut rendered_area = Rect::default();
-        tui.draw_with_resize_reflow(desired_height, |frame| {
-            let area = frame.area();
-            rendered_area = area;
-            self.chat_widget.render(area, frame.buffer);
-            if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
-                frame.set_cursor_style(self.chat_widget.cursor_style(area));
-                frame.set_cursor_position((x, y));
-            }
-        })?;
+        if terminal_resize_reflow_enabled {
+            tui.draw_with_resize_reflow(desired_height, |frame| {
+                let area = frame.area();
+                rendered_area = area;
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })?;
+        } else {
+            tui.draw(desired_height, |frame| {
+                let area = frame.area();
+                rendered_area = area;
+                self.chat_widget.render(area, frame.buffer);
+                if let Some((x, y)) = self.chat_widget.cursor_pos(area) {
+                    frame.set_cursor_style(self.chat_widget.cursor_style(area));
+                    frame.set_cursor_position((x, y));
+                }
+            })?;
+        }
         Ok(rendered_area)
     }
 }
 
 impl Drop for App {
     fn drop(&mut self) {
+        self.stop_rate_limit_polling();
         if let Err(err) = self.chat_widget.clear_managed_terminal_title() {
             tracing::debug!(error = %err, "failed to clear terminal title on app drop");
         }
