@@ -223,6 +223,61 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TelemetryConfigToml {
+    #[serde(default)]
+    pub local: Option<LocalTelemetryConfigToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct LocalTelemetryConfigToml {
+    pub enabled: Option<bool>,
+    pub directory: Option<String>,
+    pub retention_days: Option<i64>,
+    pub log_user_prompt: Option<bool>,
+    pub log_assistant_text: Option<bool>,
+    pub log_tool_output: Option<bool>,
+    pub log_diffs: Option<bool>,
+    pub hash_prompts: Option<bool>,
+    pub capture_session: Option<bool>,
+    pub capture_turns: Option<bool>,
+    pub capture_usage: Option<bool>,
+    pub capture_tool_calls: Option<bool>,
+    pub capture_approvals: Option<bool>,
+    pub capture_git: Option<bool>,
+    pub capture_config_snapshot: Option<bool>,
+    pub capture_errors: Option<bool>,
+    pub write_run_summary: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct TelemetryConfig {
+    pub local: LocalTelemetryConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalTelemetryConfig {
+    pub enabled: bool,
+    pub directory: String,
+    pub retention_days: i64,
+    pub log_user_prompt: bool,
+    pub log_assistant_text: bool,
+    pub log_tool_output: bool,
+    pub log_diffs: bool,
+    pub hash_prompts: bool,
+    pub capture_session: bool,
+    pub capture_turns: bool,
+    pub capture_usage: bool,
+    pub capture_tool_calls: bool,
+    pub capture_approvals: bool,
+    pub capture_git: bool,
+    pub capture_config_snapshot: bool,
+    pub capture_errors: bool,
+    pub write_run_summary: bool,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSuggestDiscoverableType {
