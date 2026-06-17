@@ -120,3 +120,87 @@ to ensure the new crate is formatted.
 Requested commit message:
 
 - `telemetry: add local telemetry extension crate`
+
+---
+
+## Task 4 Fix Follow-up: review findings addressed
+
+### Findings fixed
+
+1. **Public API trimmed to the task boundary**
+   - `codex_local_telemetry_extension` now exposes only `install`.
+   - `LocalTelemetryExtension`, `LocalTelemetryRunState`, `SessionTelemetryBootstrap`,
+     `SessionStopMetadata`, and `LocalTelemetryWriterHandle` are no longer public crate API.
+   - `install` now constructs the extension internally, so downstream callers do not need the
+     extension type at all.
+
+2. **Automated lifecycle coverage added**
+   - Added dedicated crate-local tests in `codex-rs/ext/local-telemetry/src/extension_tests.rs`.
+   - Coverage now exercises:
+     - thread start and stop
+     - turn start and stop
+     - token usage checkpoints
+     - tool start and finish
+     - aborted and errored turn paths
+     - summary flush on thread stop
+
+### Verification
+
+Ran exactly:
+
+```bash
+just test -p codex-local-telemetry-extension
+```
+
+Result:
+
+- passed
+- `3 tests run: 3 passed, 0 skipped`
+
+Ran again after removing unused test imports:
+
+```bash
+just test -p codex-local-telemetry-extension
+```
+
+Result:
+
+- passed
+- `3 tests run: 3 passed, 0 skipped`
+
+Ran formatting per repo instruction:
+
+```bash
+just fmt
+```
+
+Result:
+
+- partially succeeded
+- Rust formatter completed
+- overall command failed because this environment does not have `dotslash` for the Bazel/Starlark
+  formatter, and `uv` could not open `/Users/russell/.cache/uv`
+
+Ran crate-local Rust formatting explicitly:
+
+```bash
+cargo fmt --package codex-local-telemetry-extension
+```
+
+Result:
+
+- passed
+- emitted the standard nightly-only `imports_granularity = Item` warning, but formatted the crate
+
+### Self-review
+
+- No remaining task-boundary API leak is visible from `src/lib.rs`; the public entry point is now
+  only `install`.
+- The added tests go through the real extension registry contributor interfaces instead of testing
+  helper functions in isolation.
+- I did not wire anything into `codex-core`, and I did not touch files outside the allowed Task 4
+  ownership surface plus the required report file.
+
+### Fix commit
+
+- `3011dbae0 telemetry: tighten local extension API`
