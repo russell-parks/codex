@@ -18,6 +18,7 @@ use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
+use crate::local_telemetry;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::state::ActiveTurn;
@@ -1686,6 +1687,13 @@ impl Session {
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
             let workspace_routing = thread_extension_data
                 .get_or_init(|| config.workspace_routing_context());
+            local_telemetry::initialize_session_extension_data(
+                config.as_ref(),
+                &session_configuration,
+                thread_extension_data.level_id(),
+                rollout_path.as_deref(),
+                &session_extension_data,
+            );
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
