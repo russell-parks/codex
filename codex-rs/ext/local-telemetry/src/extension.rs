@@ -34,10 +34,10 @@ use crate::state::SessionStopMetadata;
 use crate::state::SessionTelemetryBootstrap;
 
 #[derive(Debug, Default)]
-pub struct LocalTelemetryExtension;
+struct LocalTelemetryExtension;
 
 impl LocalTelemetryExtension {
-    pub fn new() -> Self {
+    fn new() -> Self {
         Self
     }
 }
@@ -405,12 +405,11 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
     }
 }
 
-pub fn install<C>(
-    registry: &mut ExtensionRegistryBuilder<C>,
-    extension: Arc<LocalTelemetryExtension>,
-) where
+pub fn install<C>(registry: &mut ExtensionRegistryBuilder<C>)
+where
     C: Send + Sync + 'static,
 {
+    let extension = Arc::new(LocalTelemetryExtension::new());
     registry.thread_lifecycle_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());

@@ -6,7 +6,7 @@ use codex_local_telemetry::SessionSummary;
 use tokio::sync::Mutex;
 
 #[derive(Clone)]
-pub struct LocalTelemetryRunState {
+pub(crate) struct LocalTelemetryRunState {
     pub session_id: String,
     pub started_at: Instant,
     pub started_at_rfc3339: String,
@@ -25,7 +25,7 @@ impl std::fmt::Debug for LocalTelemetryRunState {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionTelemetryBootstrap {
+pub(crate) struct SessionTelemetryBootstrap {
     pub invocation_mode: String,
     pub cwd: String,
     pub rollout_path: Option<String>,
@@ -37,12 +37,12 @@ pub struct SessionTelemetryBootstrap {
 }
 
 #[derive(Debug, Clone)]
-pub struct SessionStopMetadata {
+pub(crate) struct SessionStopMetadata {
     pub rollout_path: Option<String>,
 }
 
 #[derive(Clone)]
-pub struct LocalTelemetryWriterHandle {
+pub(crate) struct LocalTelemetryWriterHandle {
     pub raw_event_path: String,
     pub writer: Arc<dyn LocalTelemetryWriter>,
 }
