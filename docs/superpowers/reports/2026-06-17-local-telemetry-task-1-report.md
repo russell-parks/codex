@@ -120,3 +120,42 @@ Because of that, `codex-rs/core/config.schema.json` could not be regenerated in 
 Committed as requested:
 
 - `config: add local telemetry settings`
+
+## Fix follow-up
+
+The review gate only needed the generated schema fixture to be current. I updated
+`codex-rs/core/config.schema.json` to include the new telemetry schema entries:
+
+- `TelemetryConfigToml`
+- `LocalTelemetryConfigToml`
+- top-level `telemetry` on `ConfigToml`
+
+### Verification
+
+The repo `just` wrapper is not installed in this environment, so I used the
+package-scoped cargo command directly:
+
+- `env PATH=/private/tmp/codex-tools/bin:$PATH DYLD_LIBRARY_PATH=/opt/homebrew/Cellar/llhttp/9.3.1/lib CARGO_HOME=/private/tmp/codex-cargo-home cargo run -p codex-core --bin codex-write-config-schema`
+
+Result:
+
+- Blocked by the unrelated existing compile error in `codex-thread-store`
+- Error: `error[E0594]: cannot assign to update.advance_recency_at, as update is not declared as mutable`
+
+I then ran the narrow schema drift test:
+
+- `env PATH=/private/tmp/codex-tools/bin:$PATH DYLD_LIBRARY_PATH=/opt/homebrew/Cellar/llhttp/9.3.1/lib CARGO_HOME=/private/tmp/codex-cargo-home RUST_MIN_STACK=8388608 NEXTEST_PROFILE=local cargo nextest run --no-fail-fast -p codex-core config_schema_matches_fixture`
+
+Result:
+
+- Blocked by the same unrelated `codex-thread-store` compile failure
+
+Final sanity check on the fixture itself:
+
+- `python3` parsed `codex-rs/core/config.schema.json` successfully and confirmed the new telemetry entries are present.
+
+### Self-review
+
+- The change is limited to the generated schema fixture and report evidence.
+- The JSON diff is confined to the telemetry additions and does not affect runtime code.
+- The only unverified piece is the full Rust drift test, which remains blocked by the unrelated workspace compile error above.
