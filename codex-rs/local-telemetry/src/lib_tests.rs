@@ -1,21 +1,10 @@
 use std::collections::BTreeMap;
-use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
-use std::pin::pin;
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
-use std::task::Context;
-use std::task::Poll;
-use std::task::RawWaker;
-use std::task::RawWakerVTable;
-use std::task::Waker;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-
-mod pretty_assertions {
-    pub(crate) use std::assert_eq;
-}
 
 use pretty_assertions::assert_eq;
 use serde_json::json;
@@ -90,7 +79,7 @@ fn noop_writer_methods_succeed_without_creating_files() {
         Some("2026-06-17T12:05:00Z".to_string()),
     );
 
-    block_on(async {
+    run_async(async {
         writer
             .append_event(&event)
             .await
@@ -102,6 +91,73 @@ fn noop_writer_methods_succeed_without_creating_files() {
     });
 
     assert_eq!(read_dir_entries(test_dir.path()), Vec::<PathBuf>::new());
+}
+
+#[tokio::test]
+async fn jsonl_writer_append_event_writes_jsonl_records() {
+    let test_dir = TestDir::new();
+    let writer = JsonlTelemetryWriter::new(
+        test_dir.path().to_path_buf(),
+        chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
+        "session-1".to_string(),
+    );
+    let first_event = sample_event("2026-06-17T12:00:00Z", TelemetryEventType::SessionStarted);
+    let second_event = sample_event("2026-06-17T12:01:00Z", TelemetryEventType::TurnCompleted);
+
+    writer
+        .append_event(&first_event)
+        .await
+        .expect("event append should succeed");
+    writer
+        .append_event(&second_event)
+        .await
+        .expect("second event append should succeed");
+
+    let raw_contents = std::fs::read_to_string(writer.raw_event_path())
+        .expect("raw event file should be readable");
+    let actual_events = raw_contents
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<TelemetryEvent>(line)
+                .expect("each line should deserialize as a telemetry event")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(actual_events, vec![first_event, second_event]);
+    assert_eq!(raw_contents.matches('\n').count(), 2);
+}
+
+#[tokio::test]
+async fn jsonl_writer_write_summary_persists_pretty_json() {
+    let test_dir = TestDir::new();
+    let writer = JsonlTelemetryWriter::new(
+        test_dir.path().to_path_buf(),
+        chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
+        "session-1".to_string(),
+    );
+    let summary = sample_summary(
+        writer.raw_event_path().display().to_string(),
+        Some("2026-06-17T12:05:00Z".to_string()),
+    );
+
+    writer
+        .write_summary(&summary)
+        .await
+        .expect("summary write should succeed");
+
+    let raw_contents =
+        std::fs::read_to_string(writer.summary_path()).expect("summary file should be readable");
+    let actual_summary = serde_json::from_str::<SessionSummary>(&raw_contents)
+        .expect("summary file should deserialize");
+
+    assert_eq!(actual_summary, summary);
+    assert_eq!(
+        raw_contents,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&actual_summary).unwrap()
+        )
+    );
 }
 
 fn sample_event(timestamp: &str, event_type: TelemetryEventType) -> TelemetryEvent {
@@ -189,17 +245,15 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
     }
 }
 
-fn block_on<F>(future: F) -> F::Output
+fn run_async<F>(future: F) -> F::Output
 where
-    F: Future,
+    F: std::future::Future,
 {
-    let waker = noop_waker();
-    let mut future = pin!(future);
-    let mut context = Context::from_waker(&waker);
-    match future.as_mut().poll(&mut context) {
-        Poll::Ready(output) => output,
-        Poll::Pending => panic!("future should complete immediately in this test"),
-    }
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("test runtime should be created")
+        .block_on(future)
 }
 
 fn read_dir_entries(path: &Path) -> Vec<PathBuf> {
@@ -236,20 +290,4 @@ impl Drop for TestDir {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.path);
     }
-}
-
-fn noop_waker() -> Waker {
-    unsafe fn clone(_data: *const ()) -> RawWaker {
-        RawWaker::new(std::ptr::null(), &VTABLE)
-    }
-
-    unsafe fn wake(_data: *const ()) {}
-
-    unsafe fn wake_by_ref(_data: *const ()) {}
-
-    unsafe fn drop(_data: *const ()) {}
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, wake, wake_by_ref, drop);
-
-    unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }

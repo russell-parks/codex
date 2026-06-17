@@ -78,3 +78,61 @@ Planned commit message:
 ```text
 telemetry: add local telemetry crate tests
 ```
+
+## Fix Report Addendum
+
+### Review Findings Addressed
+
+1. Replaced the local `pretty_assertions` shim with the real `pretty_assertions::assert_eq` crate import in `codex-rs/local-telemetry/src/lib_tests.rs`.
+2. Added crate-scoped behavior coverage for `JsonlTelemetryWriter`:
+   - `jsonl_writer_append_event_writes_jsonl_records`
+   - `jsonl_writer_write_summary_persists_pretty_json`
+3. Added the minimal test-only dependencies in `codex-rs/local-telemetry/Cargo.toml`:
+   - `pretty_assertions = { workspace = true }`
+   - `tokio = { workspace = true, features = ["macros", "rt"] }`
+
+### Verification Commands And Results
+
+1. Ran crate-scoped tests before finalizing:
+
+```bash
+cd /Users/russell/src/russell-parks/codex/codex-rs
+just test -p codex-local-telemetry
+```
+
+Result:
+- `codex-local-telemetry` compiled successfully
+- 8 tests run
+- 8 passed
+- 0 skipped
+
+Notable passing coverage:
+- `tests::jsonl_writer_append_event_writes_jsonl_records`
+- `tests::jsonl_writer_write_summary_persists_pretty_json`
+
+2. Ran required repository formatter command:
+
+```bash
+cd /Users/russell/src/russell-parks/codex/codex-rs
+just fmt
+```
+
+Result:
+- Rust formatter completed successfully via `cargo fmt`
+- Overall `just fmt` exited nonzero because unrelated repo-wide formatter steps could not run in this environment:
+  - Bazel/Starlark formatter failed because `dotslash` is not installed
+  - Python formatter steps failed because `uv` cache initialization under `/Users/russell/.cache/uv` is not permitted in this sandbox
+
+### Self-Review
+
+Findings:
+- No correctness issues found in the Task 3 diff after verification.
+
+Checks performed:
+- Confirmed the test file now imports the real `pretty_assertions` crate
+- Confirmed writer tests validate persisted file contents, not just derived paths
+- Confirmed scope stayed within Task 3 files plus the allowed `codex-rs/local-telemetry/Cargo.toml`
+- Confirmed no extension or core integration tests were added
+
+Residual concern:
+- `just fmt` still returns nonzero in this environment due unrelated repo-wide formatter prerequisites, even though the Rust formatting portion completed
