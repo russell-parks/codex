@@ -2,10 +2,12 @@ use std::future::Future;
 use std::path::Path;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use chrono::NaiveDate;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::Mutex;
 
 use crate::paths::event_file_path;
 use crate::paths::summary_file_path;
@@ -42,6 +44,7 @@ pub struct JsonlTelemetryWriter {
     root: PathBuf,
     raw_event_path: PathBuf,
     summary_path: PathBuf,
+    append_lock: Arc<Mutex<()>>,
 }
 
 impl JsonlTelemetryWriter {
@@ -52,6 +55,7 @@ impl JsonlTelemetryWriter {
             root,
             raw_event_path,
             summary_path,
+            append_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -71,6 +75,7 @@ impl JsonlTelemetryWriter {
 impl LocalTelemetryWriter for JsonlTelemetryWriter {
     fn append_event<'a>(&'a self, event: &'a TelemetryEvent) -> LocalTelemetryFuture<'a> {
         Box::pin(async move {
+            let _append_guard = self.append_lock.lock().await;
             ensure_parent_dir(self.raw_event_path.as_path()).await?;
 
             let mut payload = serde_json::to_vec(event).map_err(std::io::Error::other)?;
