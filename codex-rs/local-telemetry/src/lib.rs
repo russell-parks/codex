@@ -23,3 +23,7 @@ pub use summary::UsageTotals;
 pub use writer::JsonlTelemetryWriter;
 pub use writer::LocalTelemetryWriter;
 pub use writer::NoopTelemetryWriter;
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
