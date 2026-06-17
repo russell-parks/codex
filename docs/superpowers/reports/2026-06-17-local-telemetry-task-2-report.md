@@ -169,3 +169,130 @@ No correctness issues found in the final crate diff relative to Task 2 scope.
 
 - `just fmt` could not complete end-to-end because of unrelated local tool/environment issues (`dotslash` missing and `uv` cache permissions). The touched Rust files were formatted with `rustfmt` instead.
 - Task 2 intentionally contains no tests; Task 3 is still needed to add crate-level coverage.
+
+## Fix Report: 2026-06-17 review follow-up
+
+### Review findings addressed
+
+1. `JsonlTelemetryWriter::append_event` now serializes concurrent appends with a shared `Arc<tokio::sync::Mutex<()>>`, so cloned writers used behind `Arc<dyn LocalTelemetryWriter>` cannot interleave JSONL writes within this process.
+2. `SessionSummary` now exposes the design-required public fields and supporting storage structs needed by later tasks:
+   - `session_source`
+   - `git`
+   - `prompt_metadata`
+   - `turn_counts`
+   - `changed_files_summary`
+   - `resumed_from`
+   - `forked_from`
+
+### Files changed for the fix
+
+- `codex-rs/local-telemetry/Cargo.toml`
+- `codex-rs/local-telemetry/src/lib.rs`
+- `codex-rs/local-telemetry/src/summary.rs`
+- `codex-rs/local-telemetry/src/writer.rs`
+
+### Root cause
+
+- The original writer opened the JSONL file independently per append with no shared synchronization, so overlapping async callers could write to the same file concurrently.
+- The original summary model stopped short of the binding design and omitted several fields that later telemetry tasks are expected to populate directly.
+
+### Exact verification commands and results
+
+1. Repo-required formatting attempt:
+
+```bash
+just --justfile ../justfile fmt
+```
+
+Result:
+
+- failed for unrelated local-environment reasons outside this crate:
+  - missing `dotslash` for Bazel/Starlark formatting
+  - unwritable `~/.cache/uv` for Python formatting
+- Rust formatting did run before the overall `just fmt` failure
+
+2. Crate-local Rust formatting:
+
+```bash
+cargo fmt --package codex-local-telemetry --manifest-path codex-rs/Cargo.toml --all -- codex-rs/local-telemetry/src/lib.rs codex-rs/local-telemetry/src/summary.rs codex-rs/local-telemetry/src/writer.rs
+```
+
+Result:
+
+- succeeded
+- emitted only stable-channel warnings about `imports_granularity = Item`
+
+3. Repo-standard crate test entrypoint:
+
+```bash
+just test -p codex-local-telemetry
+```
+
+Result:
+
+- failed before building due sandboxed Cargo state outside the crate logic:
+  - Cargo could not create directories under `~/.cargo`
+  - the workspace dependency resolution path touched the patched `tungstenite` git source
+
+4. Narrow crate compilation with a temporary cargo home:
+
+```bash
+CARGO_HOME=/private/tmp/codex-cargo-home cargo check --manifest-path codex-rs/local-telemetry/Cargo.toml --offline
+```
+
+Result:
+
+- succeeded
+- finished `dev` profile for `codex-local-telemetry`
+
+5. Narrow crate nextest invocation with no in-repo tests:
+
+```bash
+CARGO_HOME=/private/tmp/codex-cargo-home cargo nextest run --manifest-path codex-rs/local-telemetry/Cargo.toml --no-tests pass
+```
+
+Result:
+
+- succeeded
+- compiled `codex-local-telemetry`
+- ran zero tests, which is expected because Task 3 owns the persistent test module
+
+6. Focused executable verification harness for the two review fixes:
+
+```bash
+CARGO_HOME=/private/tmp/codex-cargo-home cargo test
+```
+
+Working directory:
+
+```text
+/private/tmp/local-telemetry-verify
+```
+
+Harness coverage:
+
+- `session_summary_exposes_required_binding_fields`
+- `concurrent_appends_produce_parseable_jsonl`
+
+Result:
+
+- succeeded
+- 2 tests passed, 0 failed
+
+### Self-review
+
+#### Findings
+
+No new correctness issues found in the final Task 2 fix diff.
+
+#### Specific checks
+
+- The crate remains storage-only and still does not add OTel or extension logic.
+- The new append lock is shared across `JsonlTelemetryWriter` clones, which is the case needed for later `Arc<dyn LocalTelemetryWriter>` use.
+- The added summary structs are exported publicly so later tasks can populate them directly instead of reshaping the API.
+- The fix stayed inside the Task 2 ownership files.
+
+### Remaining concerns
+
+- The repository-wide `just fmt` and `just test -p codex-local-telemetry` entrypoints are still affected by local sandbox/tooling constraints unrelated to this crate.
+- The focused verification harness lives under `/private/tmp` and is not a persistent repo test because Task 3 owns the durable test module for this crate.
