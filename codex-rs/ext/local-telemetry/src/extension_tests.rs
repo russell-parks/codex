@@ -31,11 +31,11 @@ use codex_protocol::protocol::TurnAbortReason;
 use pretty_assertions::assert_eq;
 use tokio::sync::Mutex;
 
+use crate::SessionTelemetryBootstrap;
+use crate::initialize_session_data;
 use crate::install;
 use crate::state::LocalTelemetryRunState;
-use crate::state::LocalTelemetryWriterHandle;
-use crate::state::SessionStopMetadata;
-use crate::state::SessionTelemetryBootstrap;
+use crate::update_session_stop_metadata;
 
 #[derive(Debug, Default)]
 struct RecordingTelemetryWriter {
@@ -85,23 +85,23 @@ struct Harness {
 impl Harness {
     async fn start() -> Self {
         let writer = Arc::new(RecordingTelemetryWriter::default());
-        let mut session_init = ExtensionDataInit::new();
-        session_init.insert(LocalTelemetryWriterHandle {
-            raw_event_path: "/tmp/raw-events.jsonl".to_string(),
-            writer: writer.clone(),
-        });
-        session_init.insert(SessionTelemetryBootstrap {
-            invocation_mode: "cli".to_string(),
-            cwd: "/tmp/worktree".to_string(),
-            rollout_path: Some("/tmp/original.rollout".to_string()),
-            model: "gpt-5".to_string(),
-            reasoning_effort: Some("medium".to_string()),
-            approval_policy: "on-failure".to_string(),
-            sandbox_mode: "workspace-write".to_string(),
-            active_profile: Some("safe".to_string()),
-        });
-
+        let session_init = ExtensionDataInit::new();
         let session_store = ExtensionData::new_with_init("session-1", session_init);
+        initialize_session_data(
+            &session_store,
+            writer.clone(),
+            "/tmp/raw-events.jsonl".to_string(),
+            SessionTelemetryBootstrap {
+                invocation_mode: "cli".to_string(),
+                cwd: "/tmp/worktree".to_string(),
+                rollout_path: Some("/tmp/original.rollout".to_string()),
+                model: "gpt-5".to_string(),
+                reasoning_effort: Some("medium".to_string()),
+                approval_policy: "on-failure".to_string(),
+                sandbox_mode: "workspace-write".to_string(),
+                active_profile: Some("safe".to_string()),
+            },
+        );
         let thread_store = ExtensionData::new("thread-1");
         let mut builder = ExtensionRegistryBuilder::<()>::new();
         install(&mut builder);
@@ -170,9 +170,10 @@ fn token_usage_info() -> TokenUsageInfo {
 #[tokio::test]
 async fn thread_lifecycle_writes_session_started_and_completed() {
     let harness = Harness::start().await;
-    harness.session_store.insert(SessionStopMetadata {
-        rollout_path: Some("/tmp/final.rollout".to_string()),
-    });
+    update_session_stop_metadata(
+        &harness.session_store,
+        Some("/tmp/final.rollout".to_string()),
+    );
 
     let run_state = harness
         .thread_store

@@ -204,3 +204,38 @@ Result:
 ### Fix commit
 
 - `3011dbae0 telemetry: tighten local extension API`
+
+## Task 4 Follow-up: host seeding helpers for Task 5 compatibility
+
+### Why this follow-up was necessary
+
+The narrowed Task 4 API removed the public attachment types that later host wiring needs to seed
+session metadata into `ExtensionData`. Without a public host entry point, `codex-core` would have
+no way to provide the writer handle, startup bootstrap, or stop metadata that this extension reads
+at runtime.
+
+### What changed
+
+- kept the extension-owned run state private
+- kept `install` as the primary extension registration entry point
+- added a public `SessionTelemetryBootstrap` value type
+- added `initialize_session_data(...)` so the host can seed the writer handle and startup facts
+- added `update_session_stop_metadata(...)` so the host can publish shutdown-only facts before
+  thread stop hooks run
+
+This keeps the runtime state encapsulated while restoring a narrow, explicit integration surface
+for Task 5.
+
+### Verification
+
+Ran:
+
+```bash
+cargo fmt --package codex-local-telemetry-extension
+just test -p codex-local-telemetry-extension
+```
+
+Result:
+
+- formatting passed for the extension crate
+- tests passed: `3 tests run: 3 passed, 0 skipped`
