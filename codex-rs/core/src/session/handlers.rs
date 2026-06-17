@@ -616,6 +616,7 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
 }
 
 async fn emit_thread_stop_lifecycle(sess: &Session) {
+    crate::local_telemetry::update_session_stop_metadata(sess).await;
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_stop(codex_extension_api::ThreadStopInput {

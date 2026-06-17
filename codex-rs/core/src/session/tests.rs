@@ -5681,6 +5681,163 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
     Ok((session, rx_event))
 }
 
+async fn make_session_with_config_and_extensions_and_rx(
+    mutator: impl FnOnce(&mut Config),
+    extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
+) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
+    let codex_home = tempfile::tempdir().expect("create temp dir");
+    let mut config = build_test_config(codex_home.path()).await;
+    mutator(&mut config);
+    let config = Arc::new(config);
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    let models_manager = models_manager_with_provider(
+        config.codex_home.to_path_buf(),
+        auth_manager.clone(),
+        config.model_provider.clone(),
+    );
+    let model = get_model_offline_for_tests(config.model.as_deref());
+    let model_info =
+        construct_model_info_offline_for_tests(model.as_str(), &config.to_models_manager_config());
+    let collaboration_mode = CollaborationMode {
+        mode: ModeKind::Default,
+        settings: Settings {
+            model,
+            reasoning_effort: config.model_reasoning_effort.clone(),
+            developer_instructions: None,
+        },
+    };
+    let default_environments = vec![local(config.cwd.clone())];
+    let session_configuration = SessionConfiguration {
+        provider: config.model_provider.clone(),
+        collaboration_mode,
+        model_reasoning_summary: config.model_reasoning_summary,
+        developer_instructions: config.developer_instructions.clone(),
+        loaded_agents_md: None,
+        service_tier: None,
+        personality: config.personality,
+        base_instructions: config
+            .base_instructions
+            .clone()
+            .unwrap_or_else(|| model_info.get_model_instructions(config.personality)),
+        compact_prompt: config.compact_prompt.clone(),
+        approval_policy: config.permissions.approval_policy.clone(),
+        approvals_reviewer: config.approvals_reviewer,
+        permission_profile_state: config.permissions.permission_profile_state().clone(),
+        windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
+        environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
+        workspace_roots: config.workspace_roots.clone(),
+        codex_home: config.codex_home.clone(),
+        thread_name: None,
+        original_config_do_not_use: Arc::clone(&config),
+        metrics_service_name: None,
+        app_server_client_name: None,
+        app_server_client_version: None,
+        session_source: SessionSource::Exec,
+        forked_from_thread_id: None,
+        parent_thread_id: None,
+        thread_source: None,
+        dynamic_tools: Vec::new(),
+        user_shell_override: None,
+    };
+
+    let (tx_event, rx_event) = async_channel::unbounded();
+    let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
+    let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
+    let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
+    let skills_manager = Arc::new(SkillsManager::new(
+        config.codex_home.clone(),
+        /*bundled_skills_enabled*/ true,
+    ));
+    let environment_manager = Arc::new(EnvironmentManager::default_for_tests());
+
+    let session = Session::new(
+        session_configuration,
+        Arc::clone(&config),
+        /*user_instructions*/ None,
+        "11111111-1111-4111-8111-111111111111".to_string(),
+        auth_manager,
+        models_manager,
+        Arc::new(ExecPolicyManager::default()),
+        tx_event,
+        agent_status_tx,
+        InitialHistory::New,
+        SessionSource::Exec,
+        skills_manager,
+        plugins_manager,
+        mcp_manager,
+        extensions,
+        codex_extension_api::ExtensionDataInit::default(),
+        AgentControl::default(),
+        environment_manager,
+        /*inherited_environments*/ None,
+        /*analytics_events_client*/ None,
+        Arc::new(codex_thread_store::LocalThreadStore::new(
+            codex_thread_store::LocalThreadStoreConfig::from_config(config.as_ref()),
+            /*state_db*/ None,
+        )),
+        codex_rollout_trace::ThreadTraceContext::disabled(),
+        /*attestation_provider*/ None,
+        Some(config.multi_agent_version_from_features()),
+    )
+    .await?;
+
+    Ok((session, rx_event))
+}
+
+#[tokio::test]
+async fn session_new_seeds_local_telemetry_bootstrap_when_enabled() {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    codex_local_telemetry_extension::install(&mut builder);
+    let extensions = Arc::new(builder.build());
+    let (session, _rx_event) =
+        make_session_with_config_and_extensions_and_rx(|_config| {}, extensions)
+            .await
+            .expect("session should initialize");
+    let expected = {
+        let state = session.state.lock().await;
+        let session_configuration = &state.session_configuration;
+        (
+            session_configuration.session_source.to_string(),
+            session_configuration.cwd().display().to_string(),
+            session_configuration.collaboration_mode.model().to_string(),
+            session_configuration.approval_policy.value().to_string(),
+        )
+    };
+
+    let bootstrap = session
+        .services
+        .session_extension_data
+        .get::<codex_local_telemetry_extension::SessionTelemetryBootstrap>()
+        .expect("telemetry bootstrap should be present");
+    assert_eq!(bootstrap.invocation_mode, expected.0);
+    assert_eq!(bootstrap.cwd, expected.1);
+    assert_eq!(bootstrap.model, expected.2);
+    assert_eq!(bootstrap.approval_policy, expected.3);
+}
+
+#[tokio::test]
+async fn session_new_skips_local_telemetry_bootstrap_when_disabled() {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    codex_local_telemetry_extension::install(&mut builder);
+    let extensions = Arc::new(builder.build());
+    let (session, _rx_event) = make_session_with_config_and_extensions_and_rx(
+        |config| {
+            config.telemetry.local.enabled = false;
+        },
+        extensions,
+    )
+    .await
+    .expect("session should initialize");
+
+    assert!(
+        session
+            .services
+            .session_extension_data
+            .get::<codex_local_telemetry_extension::SessionTelemetryBootstrap>()
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn resumed_root_session_uses_thread_id_as_session_id() {
     let thread_id = ThreadId::new();

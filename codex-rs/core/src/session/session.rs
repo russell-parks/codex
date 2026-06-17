@@ -4,6 +4,7 @@ use crate::agents_md_manager::AgentsMdManager;
 use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
+use crate::local_telemetry;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::skills::SkillError;
 use crate::state::ActiveTurn;
@@ -1046,6 +1047,13 @@ impl Session {
             session_extension_data.insert(McpResourceClient::new(Arc::clone(
                 &mcp_connection_manager,
             )));
+            local_telemetry::initialize_session_extension_data(
+                config.as_ref(),
+                &session_configuration,
+                thread_extension_data.level_id(),
+                rollout_path.as_deref(),
+                &session_extension_data,
+            );
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
