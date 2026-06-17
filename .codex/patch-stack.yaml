@@ -1,0 +1,72 @@
+version: 1
+
+upstream:
+  remote: upstream
+  branch: main
+
+integration:
+  branch: integration/latest
+
+features:
+  - id: bootstrap
+    branch: fork-maintenance/bootstrap
+    description: >
+      Bootstraps fork maintenance metadata for this repository
+      with the patch stack definition used by the local
+      fork-maintenance workflow.
+    status: active
+    order: 0
+
+  - id: tui-composer-copy
+    branch: fork-maintenance/tui-composer-copy
+    description: >
+      Adds the Codext TUI composer clipboard shortcut so
+      Ctrl+Shift+C copies the current draft without changing
+      the existing Ctrl+C interrupt behavior.
+    status: active
+    order: 10
+
+  - id: tui-status-header
+    branch: fork-maintenance/tui-status-header
+    description: >
+      Adds the Codext TUI status header with model, cwd, git,
+      rate-limit, and account segments plus background polling
+      for git state and usage-limit snapshots.
+    status: active
+    order: 20
+
+  - id: tui-auth-json-watcher
+    branch: fork-maintenance/tui-auth-json-watcher
+    description: >
+      Adds the Codext auth.json watcher in the TUI, including
+      debounced reloads, deferred refresh while work is active,
+      and account-change transcript warnings.
+    status: active
+    order: 30
+
+  - id: tui-usage-limit-queue
+    branch: fork-maintenance/tui-usage-limit-queue
+    description: >
+      Adds the Codext queued-message and recovery-turn behavior
+      for usage-limit exhaustion so queued follow-ups pause and
+      resume cleanly when quota becomes available again.
+    status: active
+    order: 40
+
+  - id: app-server-auth-switching
+    branch: fork-maintenance/app-server-auth-switching
+    description: >
+      Adds the Codext app-server auth reload behavior before
+      thread and turn entry points so account switches are picked
+      up at the next safe request boundary.
+    status: active
+    order: 50
+
+  - id: tui-resume-command-branding
+    branch: fork-maintenance/tui-resume-command-branding
+    description: >
+      Replaces user-facing resume hints with the Codext fork
+      command naming so resume guidance uses codext instead of
+      codex.
+    status: active
+    order: 60
