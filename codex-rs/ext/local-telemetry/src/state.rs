@@ -25,18 +25,6 @@ impl std::fmt::Debug for LocalTelemetryRunState {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SessionTelemetryBootstrap {
-    pub invocation_mode: String,
-    pub cwd: String,
-    pub rollout_path: Option<String>,
-    pub model: String,
-    pub reasoning_effort: Option<String>,
-    pub approval_policy: String,
-    pub sandbox_mode: String,
-    pub active_profile: Option<String>,
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct SessionStopMetadata {
     pub rollout_path: Option<String>,
 }

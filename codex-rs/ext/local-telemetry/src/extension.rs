@@ -31,7 +31,18 @@ use tokio::sync::Mutex;
 use crate::state::LocalTelemetryRunState;
 use crate::state::LocalTelemetryWriterHandle;
 use crate::state::SessionStopMetadata;
-use crate::state::SessionTelemetryBootstrap;
+
+#[derive(Debug, Clone)]
+pub struct SessionTelemetryBootstrap {
+    pub invocation_mode: String,
+    pub cwd: String,
+    pub rollout_path: Option<String>,
+    pub model: String,
+    pub reasoning_effort: Option<String>,
+    pub approval_policy: String,
+    pub sandbox_mode: String,
+    pub active_profile: Option<String>,
+}
 
 #[derive(Debug, Default)]
 struct LocalTelemetryExtension;
@@ -414,6 +425,23 @@ where
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension);
+}
+
+pub fn initialize_session_data(
+    session_store: &ExtensionData,
+    writer: Arc<dyn LocalTelemetryWriter>,
+    raw_event_path: String,
+    bootstrap: SessionTelemetryBootstrap,
+) {
+    session_store.insert(LocalTelemetryWriterHandle {
+        raw_event_path,
+        writer,
+    });
+    session_store.insert(bootstrap);
+}
+
+pub fn update_session_stop_metadata(session_store: &ExtensionData, rollout_path: Option<String>) {
+    session_store.insert(SessionStopMetadata { rollout_path });
 }
 
 async fn append_event(
