@@ -123,6 +123,7 @@ impl Harness {
                 capture_turns: true,
                 capture_usage: true,
                 capture_tool_calls: true,
+                capture_approvals: true,
                 capture_errors: true,
             },
         );
@@ -477,6 +478,7 @@ async fn prompt_text_is_stored_only_when_enabled() {
             capture_turns: true,
             capture_usage: true,
             capture_tool_calls: true,
+            capture_approvals: true,
             capture_errors: true,
         },
     );
@@ -553,6 +555,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             capture_turns: true,
             capture_usage: false,
             capture_tool_calls: false,
+            capture_approvals: false,
             capture_errors: false,
         },
     );
@@ -625,4 +628,64 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
     assert_eq!(summaries[0].usage_totals, UsageTotals::default());
     assert_eq!(summaries[0].tool_summary.total_calls, 0);
     assert_eq!(summaries[0].error_summary.error_count, 0);
+}
+
+#[tokio::test]
+async fn approval_events_update_summary_and_emit_records() {
+    let harness = Harness::start().await;
+
+    crate::record_approval_requested(&harness.thread_store, "turn-1", "approval-1", "exec");
+    crate::record_approval_resolved(
+        &harness.thread_store,
+        "turn-1",
+        "approval-1",
+        "exec",
+        true,
+        "approved",
+    );
+    crate::record_approval_requested(
+        &harness.thread_store,
+        "turn-1",
+        "approval-2",
+        "request_permissions",
+    );
+    crate::record_approval_resolved(
+        &harness.thread_store,
+        "turn-1",
+        "approval-2",
+        "request_permissions",
+        false,
+        "denied",
+    );
+
+    tokio::task::yield_now().await;
+    harness.stop().await;
+
+    let events = harness.writer.events().await;
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            TelemetryEventType::SessionStarted,
+            TelemetryEventType::ApprovalRecorded,
+            TelemetryEventType::ApprovalRecorded,
+            TelemetryEventType::ApprovalRecorded,
+            TelemetryEventType::ApprovalRecorded,
+            TelemetryEventType::SessionCompleted,
+        ]
+    );
+    assert_eq!(events[1].payload["approval_kind"], "exec");
+    assert_eq!(events[1].payload["phase"], "requested");
+    assert_eq!(events[2].payload["phase"], "approved");
+    assert_eq!(events[2].payload["decision"], "approved");
+    assert_eq!(events[3].payload["approval_kind"], "request_permissions");
+    assert_eq!(events[4].payload["phase"], "denied");
+    assert_eq!(events[4].payload["decision"], "denied");
+
+    let summary = &harness.writer.summaries().await[0];
+    assert_eq!(summary.approval_summary.total_requests, 2);
+    assert_eq!(summary.approval_summary.approved_count, 1);
+    assert_eq!(summary.approval_summary.denied_count, 1);
 }
