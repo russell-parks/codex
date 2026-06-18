@@ -1049,7 +1049,7 @@ impl Session {
             )));
             local_telemetry::initialize_session_extension_data(
                 config.as_ref(),
-                &session_configuration,
+                &session_configuration.thread_config_snapshot(),
                 thread_extension_data.level_id(),
                 rollout_path.as_deref(),
                 &session_extension_data,
