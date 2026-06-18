@@ -21,6 +21,7 @@ pub(crate) struct LocalTelemetryRunState {
     pub capture_turns: bool,
     pub capture_usage: bool,
     pub capture_tool_calls: bool,
+    pub capture_approvals: bool,
     pub capture_errors: bool,
     pub summary: Arc<AsyncMutex<SessionSummary>>,
 }
@@ -35,6 +36,7 @@ impl std::fmt::Debug for LocalTelemetryRunState {
             .field("capture_turns", &self.capture_turns)
             .field("capture_usage", &self.capture_usage)
             .field("capture_tool_calls", &self.capture_tool_calls)
+            .field("capture_approvals", &self.capture_approvals)
             .field("capture_errors", &self.capture_errors)
             .finish_non_exhaustive()
     }
