@@ -14,6 +14,7 @@ use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::JsonlTelemetryWriter;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry_extension::SessionTelemetryBootstrap;
+use codex_protocol::protocol::InitialHistory;
 
 use crate::ThreadConfigSnapshot;
 use crate::config::Config;
@@ -22,6 +23,7 @@ use crate::session::session::Session;
 pub(crate) async fn initialize_session_extension_data(
     config: &Config,
     thread_config: &ThreadConfigSnapshot,
+    initial_history: &InitialHistory,
     thread_id: &str,
     rollout_path: Option<&Path>,
     session_store: &ExtensionData,
@@ -49,6 +51,10 @@ pub(crate) async fn initialize_session_extension_data(
         rollout_path: rollout_path.map(path_to_string),
         repo_root,
         git,
+        resumed_from: resumed_from(initial_history),
+        forked_from: thread_config
+            .forked_from_thread_id
+            .map(|value| value.to_string()),
         model: thread_config.collaboration_mode.model().to_string(),
         reasoning_effort: thread_config
             .collaboration_mode
@@ -165,4 +171,11 @@ fn select_remote_identity(remotes: &std::collections::BTreeMap<String, String>) 
         .get("origin")
         .or_else(|| remotes.values().next())
         .and_then(|value| canonicalize_git_remote_url(value))
+}
+
+fn resumed_from(initial_history: &InitialHistory) -> Option<String> {
+    match initial_history {
+        InitialHistory::Resumed(resumed) => Some(resumed.conversation_id.to_string()),
+        InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
+    }
 }
