@@ -933,6 +933,11 @@ impl Session {
         }
     }
 
+    pub(crate) async fn cwd(&self) -> AbsolutePathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.cwd().clone()
+    }
+
     fn managed_network_proxy_active_for_permission_profile(
         permission_profile: &PermissionProfile,
     ) -> bool {
