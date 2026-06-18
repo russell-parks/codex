@@ -2541,6 +2541,7 @@ dependencies = [
  "codex-home",
  "codex-http-client",
  "codex-install-context",
+ "codex-local-telemetry",
  "codex-login",
  "codex-mcp",
  "codex-memories-write",
