@@ -44,6 +44,8 @@ pub struct SessionTelemetryBootstrap {
     pub rollout_path: Option<String>,
     pub repo_root: Option<String>,
     pub git: Option<GitSummary>,
+    pub resumed_from: Option<String>,
+    pub forked_from: Option<String>,
     pub model: String,
     pub reasoning_effort: Option<String>,
     pub approval_policy: String,
@@ -119,8 +121,12 @@ where
                 approval_summary: Default::default(),
                 error_summary: Default::default(),
                 changed_files_summary: Default::default(),
-                resumed_from: None,
-                forked_from: None,
+                resumed_from: bootstrap
+                    .as_ref()
+                    .and_then(|value| value.resumed_from.clone()),
+                forked_from: bootstrap
+                    .as_ref()
+                    .and_then(|value| value.forked_from.clone()),
             };
             let run_state = LocalTelemetryRunState {
                 session_id: session_id.clone(),
@@ -185,6 +191,12 @@ where
                             .as_ref()
                             .and_then(|value| value.repo_root.clone()),
                         "git": bootstrap.as_ref().and_then(|value| value.git.clone()),
+                        "resumed_from": bootstrap
+                            .as_ref()
+                            .and_then(|value| value.resumed_from.clone()),
+                        "forked_from": bootstrap
+                            .as_ref()
+                            .and_then(|value| value.forked_from.clone()),
                         "active_profile": bootstrap
                             .as_ref()
                             .and_then(|value| value.active_profile.clone()),
