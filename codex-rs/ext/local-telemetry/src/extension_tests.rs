@@ -34,7 +34,9 @@ use tokio::sync::Mutex;
 use crate::SessionTelemetryBootstrap;
 use crate::initialize_session_data;
 use crate::install;
+use crate::record_user_prompt;
 use crate::state::LocalTelemetryRunState;
+use crate::state::PromptCaptureState;
 use crate::update_session_stop_metadata;
 
 #[derive(Debug, Default)]
@@ -100,6 +102,9 @@ impl Harness {
                 approval_policy: "on-failure".to_string(),
                 sandbox_mode: "workspace-write".to_string(),
                 active_profile: Some("safe".to_string()),
+                log_user_prompt: false,
+                hash_prompts: true,
+                write_run_summary: true,
             },
         );
         let thread_store = ExtensionData::new("thread-1");
@@ -243,6 +248,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
     let collaboration_mode = collaboration_mode();
     let token_usage = token_usage_info();
     let tool_name = ToolName::plain("exec_command");
+    record_user_prompt(&harness.session_store, "turn-1", "prompt body");
 
     turn_contributor
         .on_turn_start(TurnStartInput {
@@ -313,6 +319,14 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
     assert_eq!(events[2].turn_id.as_deref(), Some("turn-1"));
     assert_eq!(events[4].payload["outcome"]["kind"], "completed");
     assert_eq!(events[4].payload["outcome"]["success"], true);
+    assert_eq!(
+        events[5].payload["prompt_metadata"]["prompt_byte_length"],
+        11
+    );
+    assert_eq!(
+        events[5].payload["prompt_metadata"]["prompt_text"],
+        serde_json::Value::Null
+    );
 
     let summary = &harness.writer.summaries().await[0];
     assert_eq!(summary.turn_counts.started, 1);
@@ -325,6 +339,9 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
     assert_eq!(summary.usage_totals.output_tokens, 4);
     assert_eq!(summary.usage_totals.reasoning_tokens, 1);
     assert_eq!(summary.usage_totals.total_tokens, 15);
+    assert_eq!(summary.prompt_metadata.prompt_byte_length, 11);
+    assert_eq!(summary.prompt_metadata.prompt_text, None);
+    assert!(summary.prompt_metadata.prompt_sha256.is_some());
 }
 
 #[tokio::test]
@@ -373,4 +390,71 @@ async fn aborted_and_errored_turns_update_counters() {
     assert_eq!(summary.turn_counts.errored, 1);
     assert_eq!(summary.error_summary.error_count, 1);
     assert_eq!(summary.error_summary.last_error.as_deref(), Some("Other"));
+}
+
+#[tokio::test]
+async fn prompt_text_is_stored_only_when_enabled() {
+    let writer = Arc::new(RecordingTelemetryWriter::default());
+    let session_store = ExtensionData::new("session-2");
+    initialize_session_data(
+        &session_store,
+        writer.clone(),
+        "/tmp/raw-events.jsonl".to_string(),
+        SessionTelemetryBootstrap {
+            invocation_mode: "cli".to_string(),
+            cwd: "/tmp/worktree".to_string(),
+            rollout_path: None,
+            model: "gpt-5".to_string(),
+            reasoning_effort: None,
+            approval_policy: "never".to_string(),
+            sandbox_mode: "workspace-write".to_string(),
+            active_profile: None,
+            log_user_prompt: true,
+            hash_prompts: false,
+            write_run_summary: false,
+        },
+    );
+    record_user_prompt(&session_store, "turn-2", "visible prompt");
+
+    let turn_store = ExtensionData::new("turn-2");
+    let thread_store = ExtensionData::new("thread-2");
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    install(&mut builder);
+    let registry = builder.build();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &(),
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: false,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+    registry.turn_lifecycle_contributors()[0]
+        .on_turn_stop(TurnStopInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+
+    let run_state = thread_store
+        .get::<LocalTelemetryRunState>()
+        .expect("run state should be present");
+    let summary = run_state.summary.lock().await.clone();
+    assert_eq!(
+        summary.prompt_metadata.prompt_text.as_deref(),
+        Some("visible prompt")
+    );
+    assert_eq!(summary.prompt_metadata.prompt_sha256, None);
+}
+
+#[test]
+fn record_user_prompt_is_ignored_without_bootstrap() {
+    let session_store = ExtensionData::new("session-without-bootstrap");
+
+    record_user_prompt(&session_store, "turn-1", "prompt body");
+
+    assert!(session_store.get::<PromptCaptureState>().is_none());
 }

@@ -43,6 +43,9 @@ pub(crate) fn initialize_session_extension_data(
         approval_policy: session_configuration.approval_policy.value().to_string(),
         sandbox_mode: format!("{:?}", session_configuration.sandbox_policy()),
         active_profile: config.profile.clone(),
+        log_user_prompt: config.telemetry.local.log_user_prompt,
+        hash_prompts: config.telemetry.local.hash_prompts,
+        write_run_summary: config.telemetry.local.write_run_summary,
     };
     codex_local_telemetry_extension::initialize_session_data(
         session_store,
@@ -64,6 +67,10 @@ pub(crate) async fn update_session_stop_metadata(session: &Session) {
         &session.services.session_extension_data,
         rollout_path,
     );
+}
+
+pub(crate) fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {
+    codex_local_telemetry_extension::record_user_prompt(session_store, turn_id, prompt_text);
 }
 
 fn resolve_telemetry_root(config: &Config) -> PathBuf {

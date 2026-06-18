@@ -21,15 +21,19 @@ use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::NoopTelemetryWriter;
+use codex_local_telemetry::PromptMetadataSummary;
 use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_local_telemetry::TelemetryEvent;
 use codex_local_telemetry::TelemetryEventType;
+use codex_local_telemetry::maybe_hash_prompt;
+use codex_local_telemetry::maybe_store_prompt;
 use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::state::LocalTelemetryRunState;
 use crate::state::LocalTelemetryWriterHandle;
+use crate::state::PromptCaptureState;
 use crate::state::SessionStopMetadata;
 
 #[derive(Debug, Clone)]
@@ -42,6 +46,9 @@ pub struct SessionTelemetryBootstrap {
     pub approval_policy: String,
     pub sandbox_mode: String,
     pub active_profile: Option<String>,
+    pub log_user_prompt: bool,
+    pub hash_prompts: bool,
+    pub write_run_summary: bool,
 }
 
 #[derive(Debug, Default)]
@@ -112,6 +119,10 @@ where
                 started_at,
                 started_at_rfc3339: started_at_rfc3339.clone(),
                 writer,
+                write_run_summary: bootstrap
+                    .as_ref()
+                    .map(|value| value.write_run_summary)
+                    .unwrap_or(true),
                 summary: Arc::new(Mutex::new(summary)),
             };
             input.thread_store.insert(run_state);
@@ -142,6 +153,12 @@ where
                         "active_profile": bootstrap
                             .as_ref()
                             .and_then(|value| value.active_profile.clone()),
+                        "log_user_prompt": bootstrap
+                            .as_ref()
+                            .map(|value| value.log_user_prompt),
+                        "hash_prompts": bootstrap
+                            .as_ref()
+                            .map(|value| value.hash_prompts),
                         "rollout_path": bootstrap
                             .as_ref()
                             .and_then(|value| value.rollout_path.clone()),
@@ -190,12 +207,14 @@ where
             )
             .await;
 
-            let summary = run_state.summary.lock().await.clone();
-            if let Err(err) = run_state.writer.write_summary(&summary).await {
-                tracing::warn!(
-                    "local telemetry summary write failed for {}: {err}",
-                    run_state.session_id
-                );
+            if run_state.write_run_summary {
+                let summary = run_state.summary.lock().await.clone();
+                if let Err(err) = run_state.writer.write_summary(&summary).await {
+                    tracing::warn!(
+                        "local telemetry summary write failed for {}: {err}",
+                        run_state.session_id
+                    );
+                }
             }
         })
     }
@@ -231,10 +250,14 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 return;
             };
             let turn_id = input.turn_store.level_id();
+            let prompt_metadata = take_prompt_metadata(input.session_store, turn_id);
 
             {
                 let mut summary = run_state.summary.lock().await;
                 summary.turn_counts.completed += 1;
+                if let Some(prompt_metadata) = &prompt_metadata {
+                    summary.prompt_metadata = prompt_metadata.clone();
+                }
             }
 
             append_event(
@@ -243,6 +266,7 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 Some(turn_id),
                 json!({
                     "turn_id": turn_id,
+                    "prompt_metadata": prompt_metadata,
                 }),
             )
             .await;
@@ -255,10 +279,14 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 return;
             };
             let turn_id = input.turn_store.level_id();
+            let prompt_metadata = take_prompt_metadata(input.session_store, turn_id);
 
             {
                 let mut summary = run_state.summary.lock().await;
                 summary.turn_counts.aborted += 1;
+                if let Some(prompt_metadata) = &prompt_metadata {
+                    summary.prompt_metadata = prompt_metadata.clone();
+                }
             }
 
             append_event(
@@ -268,6 +296,7 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 json!({
                     "turn_id": turn_id,
                     "reason": format!("{:?}", input.reason),
+                    "prompt_metadata": prompt_metadata,
                 }),
             )
             .await;
@@ -280,12 +309,16 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 return;
             };
             let error_text = format!("{:?}", input.error);
+            let prompt_metadata = take_prompt_metadata(input.session_store, input.turn_id);
 
             {
                 let mut summary = run_state.summary.lock().await;
                 summary.turn_counts.errored += 1;
                 summary.error_summary.error_count += 1;
                 summary.error_summary.last_error = Some(error_text.clone());
+                if let Some(prompt_metadata) = &prompt_metadata {
+                    summary.prompt_metadata = prompt_metadata.clone();
+                }
             }
 
             append_event(
@@ -295,6 +328,7 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
                 json!({
                     "turn_id": input.turn_id,
                     "error": error_text,
+                    "prompt_metadata": prompt_metadata,
                 }),
             )
             .await;
@@ -444,6 +478,20 @@ pub fn update_session_stop_metadata(session_store: &ExtensionData, rollout_path:
     session_store.insert(SessionStopMetadata { rollout_path });
 }
 
+pub fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {
+    let Some(bootstrap) = session_store.get::<SessionTelemetryBootstrap>() else {
+        return;
+    };
+    let prompt_capture_state = session_store.get_or_init(PromptCaptureState::default);
+    let metadata = PromptMetadataSummary {
+        prompt_byte_length: u64::try_from(prompt_text.len()).unwrap_or(u64::MAX),
+        prompt_token_estimate: None,
+        prompt_sha256: maybe_hash_prompt(bootstrap.hash_prompts, prompt_text),
+        prompt_text: maybe_store_prompt(bootstrap.log_user_prompt, prompt_text),
+    };
+    prompt_capture_state.insert(turn_id.to_string(), metadata);
+}
+
 async fn append_event(
     run_state: &LocalTelemetryRunState,
     event_type: TelemetryEventType,
@@ -484,4 +532,13 @@ fn tool_call_outcome_payload(outcome: ToolCallOutcome) -> serde_json::Value {
             "kind": "aborted",
         }),
     }
+}
+
+fn take_prompt_metadata(
+    session_store: &ExtensionData,
+    turn_id: &str,
+) -> Option<PromptMetadataSummary> {
+    session_store
+        .get::<PromptCaptureState>()
+        .and_then(|state| state.remove(turn_id))
 }
