@@ -226,6 +226,8 @@ pub struct FeedbackConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct TelemetryConfigToml {
+    /// User-owned local telemetry stored on disk under the Codex state
+    /// directory.
     #[serde(default)]
     pub local: Option<LocalTelemetryConfigToml>,
 }
@@ -233,22 +235,40 @@ pub struct TelemetryConfigToml {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct LocalTelemetryConfigToml {
+    /// Enables the local telemetry store and CLI analysis commands.
     pub enabled: Option<bool>,
+    /// Telemetry root directory. Relative paths resolve under the Codex home
+    /// directory; `~/...` expands relative to the user's home directory.
     pub directory: Option<String>,
+    /// Retention window, in days, for local telemetry data.
     pub retention_days: Option<i64>,
+    /// Persist full user prompt text in local telemetry artifacts.
     pub log_user_prompt: Option<bool>,
+    /// Persist assistant response text in local telemetry artifacts.
     pub log_assistant_text: Option<bool>,
+    /// Persist tool output in local telemetry artifacts.
     pub log_tool_output: Option<bool>,
+    /// Persist diffs in local telemetry artifacts.
     pub log_diffs: Option<bool>,
+    /// Record a SHA-256 hash for user prompts without storing full prompt text.
     pub hash_prompts: Option<bool>,
+    /// Capture session start and stop events.
     pub capture_session: Option<bool>,
+    /// Capture turn lifecycle events and prompt metadata.
     pub capture_turns: Option<bool>,
+    /// Capture token usage checkpoints and usage totals.
     pub capture_usage: Option<bool>,
+    /// Capture tool call lifecycle events and summaries.
     pub capture_tool_calls: Option<bool>,
+    /// Capture human approval requests and decisions.
     pub capture_approvals: Option<bool>,
+    /// Capture sanitized git metadata for the run.
     pub capture_git: Option<bool>,
+    /// Capture a sanitized snapshot of effective config sources.
     pub capture_config_snapshot: Option<bool>,
+    /// Capture error events and error summaries.
     pub capture_errors: Option<bool>,
+    /// Write a derived per-session summary JSON file.
     pub write_run_summary: Option<bool>,
 }
 
