@@ -19,6 +19,7 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::NoopTelemetryWriter;
@@ -236,6 +237,9 @@ where
                         .commit_sha_after = git.commit_sha_after.clone();
                     summary.git.get_or_insert_with(Default::default).dirty_after = git.dirty_after;
                 }
+                if let Some(changed_files_summary) = &stop_metadata.changed_files_summary {
+                    summary.changed_files_summary = changed_files_summary.clone();
+                }
             }
 
             let payload = {
@@ -250,6 +254,7 @@ where
                     "tool_summary": summary.tool_summary,
                     "error_summary": summary.error_summary,
                     "rollout_path": summary.rollout_path,
+                    "changed_files_summary": summary.changed_files_summary,
                 })
             };
 
@@ -556,7 +561,7 @@ pub fn initialize_session_data(
 }
 
 pub fn update_session_stop_metadata(session_store: &ExtensionData, rollout_path: Option<String>) {
-    update_session_stop_metadata_with_git(session_store, rollout_path, None);
+    update_session_stop_metadata_with_details(session_store, rollout_path, None, None);
 }
 
 pub fn update_session_stop_metadata_with_git(
@@ -564,7 +569,20 @@ pub fn update_session_stop_metadata_with_git(
     rollout_path: Option<String>,
     git: Option<GitSummary>,
 ) {
-    session_store.insert(SessionStopMetadata { rollout_path, git });
+    update_session_stop_metadata_with_details(session_store, rollout_path, git, None);
+}
+
+pub fn update_session_stop_metadata_with_details(
+    session_store: &ExtensionData,
+    rollout_path: Option<String>,
+    git: Option<GitSummary>,
+    changed_files_summary: Option<ChangedFilesSummary>,
+) {
+    session_store.insert(SessionStopMetadata {
+        rollout_path,
+        git,
+        changed_files_summary,
+    });
 }
 
 pub fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {

@@ -1,6 +1,8 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use chrono::Utc;
 use codex_extension_api::ExtensionData;
@@ -10,11 +12,14 @@ use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
+use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::JsonlTelemetryWriter;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry_extension::SessionTelemetryBootstrap;
 use codex_protocol::protocol::InitialHistory;
+use tokio::process::Command;
+use tokio::time::timeout;
 
 use crate::ThreadConfigSnapshot;
 use crate::config::Config;
@@ -93,10 +98,12 @@ pub(crate) async fn update_session_stop_metadata(session: &Session) {
         }
     };
     let git = collect_git_stop_summary(cwd.as_path()).await;
-    codex_local_telemetry_extension::update_session_stop_metadata_with_git(
+    let changed_files_summary = collect_changed_files_summary(cwd.as_path()).await;
+    codex_local_telemetry_extension::update_session_stop_metadata_with_details(
         &session.services.session_extension_data,
         rollout_path,
         git,
+        changed_files_summary,
     );
 }
 
@@ -178,4 +185,105 @@ fn resumed_from(initial_history: &InitialHistory) -> Option<String> {
         InitialHistory::Resumed(resumed) => Some(resumed.conversation_id.to_string()),
         InitialHistory::New | InitialHistory::Cleared | InitialHistory::Forked(_) => None,
     }
+}
+
+const LOCAL_TELEMETRY_GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn collect_changed_files_summary(cwd: &Path) -> Option<ChangedFilesSummary> {
+    let repo_root = get_git_repo_root(cwd)?;
+    let status_output = run_git_capture(
+        repo_root.as_path(),
+        &["status", "--short", "--untracked-files=all"],
+    )
+    .await?;
+    let mut paths = parse_status_paths(&status_output);
+    paths.sort();
+    paths.dedup();
+
+    let counts_by_extension = count_paths_by_extension(&paths);
+    let (insertions, deletions) = collect_numstat_summary(repo_root.as_path()).await;
+
+    Some(ChangedFilesSummary {
+        paths,
+        counts_by_extension,
+        insertions,
+        deletions,
+    })
+}
+
+async fn collect_numstat_summary(repo_root: &Path) -> (Option<u64>, Option<u64>) {
+    let Some(output) = run_git_capture(repo_root, &["diff", "--numstat", "HEAD", "--"]).await
+    else {
+        return (None, None);
+    };
+
+    let mut insertions = 0_u64;
+    let mut deletions = 0_u64;
+    for line in output.lines() {
+        let mut parts = line.splitn(3, '\t');
+        let Some(added) = parts.next() else {
+            continue;
+        };
+        let Some(removed) = parts.next() else {
+            continue;
+        };
+        if let Ok(value) = added.parse::<u64>() {
+            insertions += value;
+        }
+        if let Ok(value) = removed.parse::<u64>() {
+            deletions += value;
+        }
+    }
+
+    (Some(insertions), Some(deletions))
+}
+
+fn parse_status_paths(output: &str) -> Vec<String> {
+    output
+        .lines()
+        .filter_map(|line| {
+            let path = line.get(3..)?.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some(
+                path.rsplit_once(" -> ")
+                    .map_or(path, |(_, renamed_path)| renamed_path)
+                    .to_string(),
+            )
+        })
+        .collect()
+}
+
+fn count_paths_by_extension(paths: &[String]) -> BTreeMap<String, u64> {
+    let mut counts = BTreeMap::new();
+    for path in paths {
+        let extension = Path::new(path)
+            .extension()
+            .and_then(|value| value.to_str())
+            .unwrap_or("")
+            .to_string();
+        *counts.entry(extension).or_insert(0) += 1;
+    }
+    counts
+}
+
+async fn run_git_capture(repo_root: &Path, args: &[&str]) -> Option<String> {
+    let command = async {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(repo_root)
+            .output()
+            .await
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        String::from_utf8(output.stdout).ok()
+    };
+
+    timeout(LOCAL_TELEMETRY_GIT_COMMAND_TIMEOUT, command)
+        .await
+        .ok()
+        .flatten()
 }
