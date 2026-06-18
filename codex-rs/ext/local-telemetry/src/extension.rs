@@ -49,6 +49,11 @@ pub struct SessionTelemetryBootstrap {
     pub log_user_prompt: bool,
     pub hash_prompts: bool,
     pub write_run_summary: bool,
+    pub capture_session: bool,
+    pub capture_turns: bool,
+    pub capture_usage: bool,
+    pub capture_tool_calls: bool,
+    pub capture_errors: bool,
 }
 
 #[derive(Debug, Default)]
@@ -123,11 +128,34 @@ where
                     .as_ref()
                     .map(|value| value.write_run_summary)
                     .unwrap_or(true),
+                capture_session: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_session)
+                    .unwrap_or(true),
+                capture_turns: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_turns)
+                    .unwrap_or(true),
+                capture_usage: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_usage)
+                    .unwrap_or(true),
+                capture_tool_calls: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_tool_calls)
+                    .unwrap_or(true),
+                capture_errors: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_errors)
+                    .unwrap_or(true),
                 summary: Arc::new(Mutex::new(summary)),
             };
             input.thread_store.insert(run_state);
 
             if let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() {
+                if !run_state.capture_session {
+                    return;
+                }
                 append_event(
                     run_state.as_ref(),
                     TelemetryEventType::SessionStarted,
@@ -199,13 +227,15 @@ where
                 })
             };
 
-            append_event(
-                run_state.as_ref(),
-                TelemetryEventType::SessionCompleted,
-                None,
-                payload,
-            )
-            .await;
+            if run_state.capture_session {
+                append_event(
+                    run_state.as_ref(),
+                    TelemetryEventType::SessionCompleted,
+                    None,
+                    payload,
+                )
+                .await;
+            }
 
             if run_state.write_run_summary {
                 let summary = run_state.summary.lock().await.clone();
@@ -226,6 +256,9 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_turns {
+                return;
+            }
 
             {
                 let mut summary = run_state.summary.lock().await;
@@ -249,6 +282,9 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_turns {
+                return;
+            }
             let turn_id = input.turn_store.level_id();
             let prompt_metadata = take_prompt_metadata(input.session_store, turn_id);
 
@@ -278,6 +314,9 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_turns {
+                return;
+            }
             let turn_id = input.turn_store.level_id();
             let prompt_metadata = take_prompt_metadata(input.session_store, turn_id);
 
@@ -308,30 +347,37 @@ impl TurnLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_turns {
+                return;
+            }
             let error_text = format!("{:?}", input.error);
             let prompt_metadata = take_prompt_metadata(input.session_store, input.turn_id);
 
             {
                 let mut summary = run_state.summary.lock().await;
                 summary.turn_counts.errored += 1;
-                summary.error_summary.error_count += 1;
-                summary.error_summary.last_error = Some(error_text.clone());
+                if run_state.capture_errors {
+                    summary.error_summary.error_count += 1;
+                    summary.error_summary.last_error = Some(error_text.clone());
+                }
                 if let Some(prompt_metadata) = &prompt_metadata {
                     summary.prompt_metadata = prompt_metadata.clone();
                 }
             }
 
-            append_event(
-                run_state.as_ref(),
-                TelemetryEventType::TurnErrored,
-                Some(input.turn_id),
-                json!({
-                    "turn_id": input.turn_id,
-                    "error": error_text,
-                    "prompt_metadata": prompt_metadata,
-                }),
-            )
-            .await;
+            if run_state.capture_errors {
+                append_event(
+                    run_state.as_ref(),
+                    TelemetryEventType::TurnErrored,
+                    Some(input.turn_id),
+                    json!({
+                        "turn_id": input.turn_id,
+                        "error": error_text,
+                        "prompt_metadata": prompt_metadata,
+                    }),
+                )
+                .await;
+            }
         })
     }
 }
@@ -348,6 +394,9 @@ impl TokenUsageContributor for LocalTelemetryExtension {
             let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_usage {
+                return;
+            }
 
             {
                 let mut summary = run_state.summary.lock().await;
@@ -386,6 +435,9 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_tool_calls {
+                return;
+            }
 
             {
                 let mut summary = run_state.summary.lock().await;
@@ -412,6 +464,9 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
             let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() else {
                 return;
             };
+            if !run_state.capture_tool_calls {
+                return;
+            }
 
             {
                 let mut summary = run_state.summary.lock().await;
@@ -482,6 +537,9 @@ pub fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_t
     let Some(bootstrap) = session_store.get::<SessionTelemetryBootstrap>() else {
         return;
     };
+    if !bootstrap.capture_turns {
+        return;
+    }
     let prompt_capture_state = session_store.get_or_init(PromptCaptureState::default);
     let metadata = PromptMetadataSummary {
         prompt_byte_length: u64::try_from(prompt_text.len()).unwrap_or(u64::MAX),
