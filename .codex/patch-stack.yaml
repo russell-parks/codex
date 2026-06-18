@@ -70,3 +70,12 @@ features:
       codex.
     status: active
     order: 60
+
+  - id: revert-codext-naming
+    branch: fork-maintenance/revert-codext-naming
+    description: >
+      Reverts Codext-specific user-facing command naming back
+      to codex naming on top of the imported fork feature stack,
+      so downstream packaging can keep upstream command branding.
+    status: active
+    order: 70
