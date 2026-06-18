@@ -15,6 +15,7 @@ use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::SessionSummary;
@@ -40,7 +41,6 @@ use crate::install;
 use crate::record_user_prompt;
 use crate::state::LocalTelemetryRunState;
 use crate::state::PromptCaptureState;
-use crate::update_session_stop_metadata;
 
 #[derive(Debug, Default)]
 struct RecordingTelemetryWriter {
@@ -194,9 +194,25 @@ fn token_usage_info() -> TokenUsageInfo {
 #[tokio::test]
 async fn thread_lifecycle_writes_session_started_and_completed() {
     let harness = Harness::start().await;
-    update_session_stop_metadata(
+    crate::update_session_stop_metadata_with_details(
         &harness.session_store,
         Some("/tmp/final.rollout".to_string()),
+        Some(GitSummary {
+            remote: None,
+            branch: None,
+            commit_sha_before: None,
+            commit_sha_after: Some("def456".to_string()),
+            dirty_before: None,
+            dirty_after: Some(true),
+        }),
+        Some(ChangedFilesSummary {
+            paths: vec!["README.md".to_string(), "src/main.rs".to_string()],
+            counts_by_extension: [("md".to_string(), 1_u64), ("rs".to_string(), 1_u64)]
+                .into_iter()
+                .collect(),
+            insertions: Some(12),
+            deletions: Some(3),
+        }),
     );
 
     let run_state = harness
@@ -228,6 +244,7 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
     assert!(events[0].payload["resumed_from"].is_string());
     assert!(events[0].payload["forked_from"].is_string());
     assert_eq!(events[1].payload["rollout_path"], "/tmp/final.rollout");
+    assert_eq!(events[1].payload["changed_files_summary"]["insertions"], 12);
 
     let summaries = harness.writer.summaries().await;
     assert_eq!(summaries.len(), 1);
@@ -250,9 +267,9 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
             remote: Some("github.com/openai/codex".to_string()),
             branch: Some("feat/local-telemetry".to_string()),
             commit_sha_before: Some("abc123".to_string()),
-            commit_sha_after: None,
+            commit_sha_after: Some("def456".to_string()),
             dirty_before: Some(false),
-            dirty_after: None,
+            dirty_after: Some(true),
         }),
         prompt_metadata: Default::default(),
         raw_event_path: "/tmp/raw-events.jsonl".to_string(),
@@ -262,7 +279,14 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
         tool_summary: Default::default(),
         approval_summary: Default::default(),
         error_summary: Default::default(),
-        changed_files_summary: Default::default(),
+        changed_files_summary: ChangedFilesSummary {
+            paths: vec!["README.md".to_string(), "src/main.rs".to_string()],
+            counts_by_extension: [("md".to_string(), 1_u64), ("rs".to_string(), 1_u64)]
+                .into_iter()
+                .collect(),
+            insertions: Some(12),
+            deletions: Some(3),
+        },
         resumed_from: summary.resumed_from.clone(),
         forked_from: summary.forked_from.clone(),
     };
