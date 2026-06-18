@@ -15,6 +15,7 @@ use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
@@ -98,6 +99,15 @@ impl Harness {
                 invocation_mode: "cli".to_string(),
                 cwd: "/tmp/worktree".to_string(),
                 rollout_path: Some("/tmp/original.rollout".to_string()),
+                repo_root: Some("/tmp".to_string()),
+                git: Some(GitSummary {
+                    remote: Some("github.com/openai/codex".to_string()),
+                    branch: Some("feat/local-telemetry".to_string()),
+                    commit_sha_before: Some("abc123".to_string()),
+                    commit_sha_after: None,
+                    dirty_before: Some(false),
+                    dirty_after: None,
+                }),
                 model: "gpt-5".to_string(),
                 reasoning_effort: Some("medium".to_string()),
                 approval_policy: "on-failure".to_string(),
@@ -207,6 +217,11 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
     );
     assert_eq!(events[0].session_id, "thread-1");
     assert_eq!(events[0].payload["invocation_mode"], "cli");
+    assert_eq!(events[0].payload["repo_root"], "/tmp");
+    assert_eq!(
+        events[0].payload["git"]["branch"],
+        serde_json::Value::String("feat/local-telemetry".to_string())
+    );
     assert_eq!(events[1].payload["rollout_path"], "/tmp/final.rollout");
 
     let summaries = harness.writer.summaries().await;
@@ -225,8 +240,15 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
         approval_policy: Some("on-failure".to_string()),
         sandbox_mode: Some("workspace-write".to_string()),
         cwd: Some("/tmp/worktree".to_string()),
-        repo_root: None,
-        git: None,
+        repo_root: Some("/tmp".to_string()),
+        git: Some(GitSummary {
+            remote: Some("github.com/openai/codex".to_string()),
+            branch: Some("feat/local-telemetry".to_string()),
+            commit_sha_before: Some("abc123".to_string()),
+            commit_sha_after: None,
+            dirty_before: Some(false),
+            dirty_after: None,
+        }),
         prompt_metadata: Default::default(),
         raw_event_path: "/tmp/raw-events.jsonl".to_string(),
         rollout_path: Some("/tmp/final.rollout".to_string()),
@@ -410,6 +432,8 @@ async fn prompt_text_is_stored_only_when_enabled() {
             invocation_mode: "cli".to_string(),
             cwd: "/tmp/worktree".to_string(),
             rollout_path: None,
+            repo_root: None,
+            git: None,
             model: "gpt-5".to_string(),
             reasoning_effort: None,
             approval_policy: "never".to_string(),
@@ -482,6 +506,8 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             invocation_mode: "cli".to_string(),
             cwd: "/tmp/worktree".to_string(),
             rollout_path: None,
+            repo_root: None,
+            git: None,
             model: "gpt-5".to_string(),
             reasoning_effort: Some("medium".to_string()),
             approval_policy: "on-failure".to_string(),
