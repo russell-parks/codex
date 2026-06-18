@@ -19,6 +19,7 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
+use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::NoopTelemetryWriter;
 use codex_local_telemetry::PromptMetadataSummary;
@@ -41,6 +42,8 @@ pub struct SessionTelemetryBootstrap {
     pub invocation_mode: String,
     pub cwd: String,
     pub rollout_path: Option<String>,
+    pub repo_root: Option<String>,
+    pub git: Option<GitSummary>,
     pub model: String,
     pub reasoning_effort: Option<String>,
     pub approval_policy: String,
@@ -100,8 +103,8 @@ where
                     .map(|value| value.approval_policy.clone()),
                 sandbox_mode: bootstrap.as_ref().map(|value| value.sandbox_mode.clone()),
                 cwd: bootstrap.as_ref().map(|value| value.cwd.clone()),
-                repo_root: None,
-                git: None,
+                repo_root: bootstrap.as_ref().and_then(|value| value.repo_root.clone()),
+                git: bootstrap.as_ref().and_then(|value| value.git.clone()),
                 prompt_metadata: Default::default(),
                 raw_event_path: writer_handle
                     .as_ref()
@@ -178,6 +181,10 @@ where
                         "sandbox_mode": bootstrap
                             .as_ref()
                             .map(|value| value.sandbox_mode.clone()),
+                        "repo_root": bootstrap
+                            .as_ref()
+                            .and_then(|value| value.repo_root.clone()),
+                        "git": bootstrap.as_ref().and_then(|value| value.git.clone()),
                         "active_profile": bootstrap
                             .as_ref()
                             .and_then(|value| value.active_profile.clone()),
@@ -210,6 +217,13 @@ where
             if let Some(stop_metadata) = input.session_store.get::<SessionStopMetadata>() {
                 let mut summary = run_state.summary.lock().await;
                 summary.rollout_path = stop_metadata.rollout_path.clone();
+                if let Some(git) = &stop_metadata.git {
+                    summary
+                        .git
+                        .get_or_insert_with(Default::default)
+                        .commit_sha_after = git.commit_sha_after.clone();
+                    summary.git.get_or_insert_with(Default::default).dirty_after = git.dirty_after;
+                }
             }
 
             let payload = {
@@ -530,7 +544,15 @@ pub fn initialize_session_data(
 }
 
 pub fn update_session_stop_metadata(session_store: &ExtensionData, rollout_path: Option<String>) {
-    session_store.insert(SessionStopMetadata { rollout_path });
+    update_session_stop_metadata_with_git(session_store, rollout_path, None);
+}
+
+pub fn update_session_stop_metadata_with_git(
+    session_store: &ExtensionData,
+    rollout_path: Option<String>,
+    git: Option<GitSummary>,
+) {
+    session_store.insert(SessionStopMetadata { rollout_path, git });
 }
 
 pub fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {

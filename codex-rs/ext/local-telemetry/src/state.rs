@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Instant;
 
+use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::PromptMetadataSummary;
 use codex_local_telemetry::SessionSummary;
@@ -41,6 +42,7 @@ impl std::fmt::Debug for LocalTelemetryRunState {
 #[derive(Debug, Clone)]
 pub(crate) struct SessionStopMetadata {
     pub rollout_path: Option<String>,
+    pub git: Option<GitSummary>,
 }
 
 #[derive(Clone)]
