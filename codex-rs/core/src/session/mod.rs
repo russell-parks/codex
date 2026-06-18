@@ -4950,6 +4950,11 @@ impl Session {
         )
         .await;
         user_message_item.client_id = client_id;
+        crate::local_telemetry::record_user_prompt(
+            &self.services.session_extension_data,
+            &turn_context.sub_id,
+            &user_message_item.message(),
+        );
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
