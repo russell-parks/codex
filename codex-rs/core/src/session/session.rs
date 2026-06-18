@@ -1693,7 +1693,8 @@ impl Session {
                 thread_extension_data.level_id(),
                 rollout_path.as_deref(),
                 &session_extension_data,
-            );
+            )
+            .await;
             for contributor in extensions.thread_lifecycle_contributors() {
                 contributor.on_thread_start(codex_extension_api::ThreadStartInput {
                     config: config.as_ref(),
