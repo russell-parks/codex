@@ -49,6 +49,11 @@ pub(crate) fn initialize_session_extension_data(
         log_user_prompt: config.telemetry.local.log_user_prompt,
         hash_prompts: config.telemetry.local.hash_prompts,
         write_run_summary: config.telemetry.local.write_run_summary,
+        capture_session: config.telemetry.local.capture_session,
+        capture_turns: config.telemetry.local.capture_turns,
+        capture_usage: config.telemetry.local.capture_usage,
+        capture_tool_calls: config.telemetry.local.capture_tool_calls,
+        capture_errors: config.telemetry.local.capture_errors,
     };
     codex_local_telemetry_extension::initialize_session_data(
         session_store,
