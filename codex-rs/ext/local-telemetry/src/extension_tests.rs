@@ -22,6 +22,7 @@ use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_local_telemetry::TelemetryEvent;
 use codex_local_telemetry::TelemetryEventType;
 use codex_local_telemetry::UsageTotals;
+use codex_protocol::ThreadId;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -108,6 +109,8 @@ impl Harness {
                     dirty_before: Some(false),
                     dirty_after: None,
                 }),
+                resumed_from: Some(ThreadId::new().to_string()),
+                forked_from: Some(ThreadId::new().to_string()),
                 model: "gpt-5".to_string(),
                 reasoning_effort: Some("medium".to_string()),
                 approval_policy: "on-failure".to_string(),
@@ -222,6 +225,8 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
         events[0].payload["git"]["branch"],
         serde_json::Value::String("feat/local-telemetry".to_string())
     );
+    assert!(events[0].payload["resumed_from"].is_string());
+    assert!(events[0].payload["forked_from"].is_string());
     assert_eq!(events[1].payload["rollout_path"], "/tmp/final.rollout");
 
     let summaries = harness.writer.summaries().await;
@@ -258,8 +263,8 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
         approval_summary: Default::default(),
         error_summary: Default::default(),
         changed_files_summary: Default::default(),
-        resumed_from: None,
-        forked_from: None,
+        resumed_from: summary.resumed_from.clone(),
+        forked_from: summary.forked_from.clone(),
     };
     assert_eq!(&expected, summary);
     assert!(summary.ended_at.is_some());
@@ -434,6 +439,8 @@ async fn prompt_text_is_stored_only_when_enabled() {
             rollout_path: None,
             repo_root: None,
             git: None,
+            resumed_from: None,
+            forked_from: None,
             model: "gpt-5".to_string(),
             reasoning_effort: None,
             approval_policy: "never".to_string(),
@@ -508,6 +515,8 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             rollout_path: None,
             repo_root: None,
             git: None,
+            resumed_from: None,
+            forked_from: None,
             model: "gpt-5".to_string(),
             reasoning_effort: Some("medium".to_string()),
             approval_policy: "on-failure".to_string(),
