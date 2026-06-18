@@ -20,6 +20,7 @@ use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_local_telemetry::TelemetryEvent;
 use codex_local_telemetry::TelemetryEventType;
+use codex_local_telemetry::UsageTotals;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
@@ -105,6 +106,11 @@ impl Harness {
                 log_user_prompt: false,
                 hash_prompts: true,
                 write_run_summary: true,
+                capture_session: true,
+                capture_turns: true,
+                capture_usage: true,
+                capture_tool_calls: true,
+                capture_errors: true,
             },
         );
         let thread_store = ExtensionData::new("thread-1");
@@ -412,6 +418,11 @@ async fn prompt_text_is_stored_only_when_enabled() {
             log_user_prompt: true,
             hash_prompts: false,
             write_run_summary: false,
+            capture_session: true,
+            capture_turns: true,
+            capture_usage: true,
+            capture_tool_calls: true,
+            capture_errors: true,
         },
     );
     record_user_prompt(&session_store, "turn-2", "visible prompt");
@@ -457,4 +468,102 @@ fn record_user_prompt_is_ignored_without_bootstrap() {
     record_user_prompt(&session_store, "turn-1", "prompt body");
 
     assert!(session_store.get::<PromptCaptureState>().is_none());
+}
+
+#[tokio::test]
+async fn capture_flags_disable_usage_tool_and_error_events() {
+    let writer = Arc::new(RecordingTelemetryWriter::default());
+    let session_store = ExtensionData::new("session-3");
+    initialize_session_data(
+        &session_store,
+        writer.clone(),
+        "/tmp/raw-events.jsonl".to_string(),
+        SessionTelemetryBootstrap {
+            invocation_mode: "cli".to_string(),
+            cwd: "/tmp/worktree".to_string(),
+            rollout_path: None,
+            model: "gpt-5".to_string(),
+            reasoning_effort: Some("medium".to_string()),
+            approval_policy: "on-failure".to_string(),
+            sandbox_mode: "workspace-write".to_string(),
+            active_profile: None,
+            log_user_prompt: false,
+            hash_prompts: true,
+            write_run_summary: true,
+            capture_session: true,
+            capture_turns: true,
+            capture_usage: false,
+            capture_tool_calls: false,
+            capture_errors: false,
+        },
+    );
+    let thread_store = ExtensionData::new("thread-3");
+    let turn_store = ExtensionData::new("turn-3");
+    let mut builder = ExtensionRegistryBuilder::<()>::new();
+    install(&mut builder);
+    let registry = builder.build();
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_start(ThreadStartInput {
+            config: &(),
+            session_source: &SessionSource::Cli,
+            persistent_thread_state_available: false,
+            environments: &[],
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    registry.token_usage_contributors()[0]
+        .on_token_usage(
+            &session_store,
+            &thread_store,
+            &turn_store,
+            &token_usage_info(),
+        )
+        .await;
+    let tool_name = ToolName::plain("exec_command");
+    registry.tool_lifecycle_contributors()[0]
+        .on_tool_start(ToolStartInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+            turn_id: "turn-3",
+            call_id: "call-3",
+            tool_name: &tool_name,
+            source: ToolCallSource::Direct,
+        })
+        .await;
+    registry.turn_lifecycle_contributors()[0]
+        .on_turn_error(TurnErrorInput {
+            turn_id: "turn-3",
+            error: CodexErrorInfo::Other,
+            session_store: &session_store,
+            thread_store: &thread_store,
+            turn_store: &turn_store,
+        })
+        .await;
+    registry.thread_lifecycle_contributors()[0]
+        .on_thread_stop(ThreadStopInput {
+            session_store: &session_store,
+            thread_store: &thread_store,
+        })
+        .await;
+
+    let events = writer.events().await;
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.event_type.clone())
+            .collect::<Vec<_>>(),
+        vec![
+            TelemetryEventType::SessionStarted,
+            TelemetryEventType::SessionCompleted,
+        ]
+    );
+
+    let summaries = writer.summaries().await;
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0].usage_totals, UsageTotals::default());
+    assert_eq!(summaries[0].tool_summary.total_calls, 0);
+    assert_eq!(summaries[0].error_summary.error_count, 0);
 }

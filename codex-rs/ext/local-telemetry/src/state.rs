@@ -15,6 +15,11 @@ pub(crate) struct LocalTelemetryRunState {
     pub started_at_rfc3339: String,
     pub writer: Arc<dyn LocalTelemetryWriter>,
     pub write_run_summary: bool,
+    pub capture_session: bool,
+    pub capture_turns: bool,
+    pub capture_usage: bool,
+    pub capture_tool_calls: bool,
+    pub capture_errors: bool,
     pub summary: Arc<AsyncMutex<SessionSummary>>,
 }
 
@@ -24,6 +29,11 @@ impl std::fmt::Debug for LocalTelemetryRunState {
             .field("session_id", &self.session_id)
             .field("started_at", &self.started_at)
             .field("started_at_rfc3339", &self.started_at_rfc3339)
+            .field("capture_session", &self.capture_session)
+            .field("capture_turns", &self.capture_turns)
+            .field("capture_usage", &self.capture_usage)
+            .field("capture_tool_calls", &self.capture_tool_calls)
+            .field("capture_errors", &self.capture_errors)
             .finish_non_exhaustive()
     }
 }
