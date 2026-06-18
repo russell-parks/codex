@@ -1,5 +1,6 @@
 pub mod paths;
 pub mod privacy;
+pub mod reader;
 pub mod schema;
 pub mod summary;
 pub mod writer;
@@ -8,6 +9,8 @@ pub use paths::event_file_path;
 pub use paths::summary_file_path;
 pub use privacy::maybe_hash_prompt;
 pub use privacy::maybe_store_prompt;
+pub use reader::LocalTelemetryStore;
+pub use reader::PruneResult;
 pub use schema::TELEMETRY_SCHEMA_VERSION;
 pub use schema::TelemetryEvent;
 pub use schema::TelemetryEventType;
