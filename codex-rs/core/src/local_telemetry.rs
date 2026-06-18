@@ -8,13 +8,13 @@ use codex_local_telemetry::JsonlTelemetryWriter;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry_extension::SessionTelemetryBootstrap;
 
+use crate::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::session::session::Session;
-use crate::session::session::SessionConfiguration;
 
 pub(crate) fn initialize_session_extension_data(
     config: &Config,
-    session_configuration: &SessionConfiguration,
+    thread_config: &ThreadConfigSnapshot,
     thread_id: &str,
     rollout_path: Option<&Path>,
     session_store: &ExtensionData,
@@ -32,17 +32,20 @@ pub(crate) fn initialize_session_extension_data(
     let raw_event_path = writer.raw_event_path().display().to_string();
     let writer: Arc<dyn LocalTelemetryWriter> = Arc::new(writer);
     let bootstrap = SessionTelemetryBootstrap {
-        invocation_mode: session_configuration.session_source.to_string(),
-        cwd: session_configuration.cwd().display().to_string(),
+        invocation_mode: thread_config.session_source.to_string(),
+        cwd: thread_config.cwd().display().to_string(),
         rollout_path: rollout_path.map(path_to_string),
-        model: session_configuration.collaboration_mode.model().to_string(),
-        reasoning_effort: session_configuration
+        model: thread_config.collaboration_mode.model().to_string(),
+        reasoning_effort: thread_config
             .collaboration_mode
             .reasoning_effort()
             .map(|value| value.to_string()),
-        approval_policy: session_configuration.approval_policy.value().to_string(),
-        sandbox_mode: format!("{:?}", session_configuration.sandbox_policy()),
-        active_profile: config.profile.clone(),
+        approval_policy: thread_config.approval_policy.to_string(),
+        sandbox_mode: format!("{:?}", thread_config.sandbox_policy()),
+        active_profile: thread_config
+            .active_permission_profile
+            .as_ref()
+            .map(|value| value.id.clone()),
         log_user_prompt: config.telemetry.local.log_user_prompt,
         hash_prompts: config.telemetry.local.hash_prompts,
         write_run_summary: config.telemetry.local.write_run_summary,
