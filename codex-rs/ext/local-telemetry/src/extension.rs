@@ -59,6 +59,7 @@ pub struct SessionTelemetryBootstrap {
     pub capture_turns: bool,
     pub capture_usage: bool,
     pub capture_tool_calls: bool,
+    pub capture_approvals: bool,
     pub capture_errors: bool,
 }
 
@@ -153,6 +154,10 @@ where
                 capture_tool_calls: bootstrap
                     .as_ref()
                     .map(|value| value.capture_tool_calls)
+                    .unwrap_or(true),
+                capture_approvals: bootstrap
+                    .as_ref()
+                    .map(|value| value.capture_approvals)
                     .unwrap_or(true),
                 capture_errors: bootstrap
                     .as_ref()
@@ -582,6 +587,88 @@ pub fn update_session_stop_metadata_with_details(
         rollout_path,
         git,
         changed_files_summary,
+    });
+}
+
+pub fn record_approval_requested(
+    thread_store: &ExtensionData,
+    turn_id: &str,
+    approval_id: &str,
+    approval_kind: &str,
+) {
+    let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
+        return;
+    };
+    if !run_state.capture_approvals {
+        return;
+    }
+
+    let run_state = run_state.clone();
+    let turn_id = turn_id.to_string();
+    let approval_id = approval_id.to_string();
+    let approval_kind = approval_kind.to_string();
+    tokio::spawn(async move {
+        {
+            let mut summary = run_state.summary.lock().await;
+            summary.approval_summary.total_requests += 1;
+        }
+        append_event(
+            run_state.as_ref(),
+            TelemetryEventType::ApprovalRecorded,
+            Some(turn_id.as_str()),
+            json!({
+                "turn_id": turn_id,
+                "approval_id": approval_id,
+                "approval_kind": approval_kind,
+                "phase": "requested",
+            }),
+        )
+        .await;
+    });
+}
+
+pub fn record_approval_resolved(
+    thread_store: &ExtensionData,
+    turn_id: &str,
+    approval_id: &str,
+    approval_kind: &str,
+    approved: bool,
+    decision: &str,
+) {
+    let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
+        return;
+    };
+    if !run_state.capture_approvals {
+        return;
+    }
+
+    let run_state = run_state.clone();
+    let turn_id = turn_id.to_string();
+    let approval_id = approval_id.to_string();
+    let approval_kind = approval_kind.to_string();
+    let decision = decision.to_string();
+    tokio::spawn(async move {
+        {
+            let mut summary = run_state.summary.lock().await;
+            if approved {
+                summary.approval_summary.approved_count += 1;
+            } else {
+                summary.approval_summary.denied_count += 1;
+            }
+        }
+        append_event(
+            run_state.as_ref(),
+            TelemetryEventType::ApprovalRecorded,
+            Some(turn_id.as_str()),
+            json!({
+                "turn_id": turn_id,
+                "approval_id": approval_id,
+                "approval_kind": approval_kind,
+                "phase": if approved { "approved" } else { "denied" },
+                "decision": decision,
+            }),
+        )
+        .await;
     });
 }
 

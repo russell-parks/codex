@@ -78,6 +78,7 @@ pub(crate) async fn initialize_session_extension_data(
         capture_turns: config.telemetry.local.capture_turns,
         capture_usage: config.telemetry.local.capture_usage,
         capture_tool_calls: config.telemetry.local.capture_tool_calls,
+        capture_approvals: config.telemetry.local.capture_approvals,
         capture_errors: config.telemetry.local.capture_errors,
     };
     codex_local_telemetry_extension::initialize_session_data(
@@ -109,6 +110,38 @@ pub(crate) async fn update_session_stop_metadata(session: &Session) {
 
 pub(crate) fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {
     codex_local_telemetry_extension::record_user_prompt(session_store, turn_id, prompt_text);
+}
+
+pub(crate) fn record_approval_requested(
+    thread_store: &ExtensionData,
+    turn_id: &str,
+    approval_id: &str,
+    approval_kind: &str,
+) {
+    codex_local_telemetry_extension::record_approval_requested(
+        thread_store,
+        turn_id,
+        approval_id,
+        approval_kind,
+    );
+}
+
+pub(crate) fn record_approval_resolved(
+    thread_store: &ExtensionData,
+    turn_id: &str,
+    approval_id: &str,
+    approval_kind: &str,
+    approved: bool,
+    decision: &str,
+) {
+    codex_local_telemetry_extension::record_approval_resolved(
+        thread_store,
+        turn_id,
+        approval_id,
+        approval_kind,
+        approved,
+        decision,
+    );
 }
 
 fn resolve_telemetry_root(config: &Config) -> PathBuf {

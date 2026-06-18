@@ -3354,6 +3354,7 @@ impl Session {
                         tx_approve,
                         kind,
                         turn_context.sub_id.clone(),
+                        "exec",
                     );
                     let prompt = network_approval_context.as_ref().map(|_| {
                         ts.track_network_prompt(
@@ -3423,6 +3424,12 @@ impl Session {
         });
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &effective_approval_id,
+            "exec",
+        );
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
@@ -3453,6 +3460,7 @@ impl Session {
                         tx_approve,
                         ExecApprovalKind::Command,
                         turn_context.sub_id.clone(),
+                        "apply_patch",
                     )
                 }
                 None => None,
@@ -3472,6 +3480,12 @@ impl Session {
         });
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context, event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &approval_id,
+            "apply_patch",
+        );
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
@@ -3631,6 +3645,12 @@ impl Session {
         });
         let _user_wait = self.start_user_wait_timing(turn_context, user_wait_owner.as_deref());
         self.send_event(turn_context.as_ref(), event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &call_id,
+            "request_permissions",
+        );
         tokio::select! {
             biased;
             _ = cancellation_token.cancelled() => {
@@ -3760,6 +3780,18 @@ impl Session {
                     &response,
                     &entry.environment.selection.environment_id,
                     &entry.turn_context,
+                );
+                crate::local_telemetry::record_approval_resolved(
+                    &self.services.thread_extension_data,
+                    &entry.turn_context.sub_id,
+                    call_id,
+                    "request_permissions",
+                    !response.permissions.is_empty(),
+                    if response.permissions.is_empty() {
+                        "denied"
+                    } else {
+                        "approved"
+                    },
                 );
                 entry.tx_response.send(response).ok();
             }
@@ -3895,6 +3927,18 @@ impl Session {
             .await
         {
             let decision = pending.validate(decision);
+            let approved = !matches!(
+                decision,
+                ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort
+            );
+            crate::local_telemetry::record_approval_resolved(
+                &self.services.thread_extension_data,
+                &pending.turn_id,
+                approval_id,
+                pending.approval_kind,
+                approved,
+                decision.to_opaque_string(),
+            );
             let _ = pending.sender.send(decision);
         } else {
             warn!("No pending approval found for call_id: {approval_id}");
