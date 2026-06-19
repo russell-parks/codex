@@ -1051,6 +1051,8 @@ impl Session {
                 config.as_ref(),
                 &session_configuration.thread_config_snapshot(),
                 &initial_history,
+                session_configuration.developer_instructions.is_some(),
+                session_configuration.loaded_agents_md.as_ref(),
                 thread_extension_data.level_id(),
                 rollout_path.as_deref(),
                 &session_extension_data,

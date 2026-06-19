@@ -4,7 +4,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::agents_md::LoadedAgentsMd;
 use chrono::Utc;
+use codex_config::CONFIG_TOML_FILE;
+use codex_config::ConfigLayerSource;
+use codex_config::ConfigLayerStackOrdering;
+use codex_config::format_config_layer_source;
 use codex_extension_api::ExtensionData;
 use codex_git_utils::canonicalize_git_remote_url;
 use codex_git_utils::current_branch_name;
@@ -13,6 +18,8 @@ use codex_git_utils::get_git_repo_root;
 use codex_git_utils::get_has_changes;
 use codex_git_utils::get_head_commit_hash;
 use codex_local_telemetry::ChangedFilesSummary;
+use codex_local_telemetry::ConfigSnapshotSummary;
+use codex_local_telemetry::ConfigSourceSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::JsonlTelemetryWriter;
 use codex_local_telemetry::LocalTelemetryWriter;
@@ -29,6 +36,8 @@ pub(crate) async fn initialize_session_extension_data(
     config: &Config,
     thread_config: &ThreadConfigSnapshot,
     initial_history: &InitialHistory,
+    developer_instructions_loaded: bool,
+    loaded_agents_md: Option<&LoadedAgentsMd>,
     thread_id: &str,
     rollout_path: Option<&Path>,
     session_store: &ExtensionData,
@@ -50,6 +59,10 @@ pub(crate) async fn initialize_session_extension_data(
     } else {
         (None, None)
     };
+    let config_snapshot =
+        config.telemetry.local.capture_config_snapshot.then(|| {
+            build_config_snapshot(config, developer_instructions_loaded, loaded_agents_md)
+        });
     let bootstrap = SessionTelemetryBootstrap {
         invocation_mode: thread_config.session_source.to_string(),
         cwd: thread_config.cwd().display().to_string(),
@@ -71,6 +84,7 @@ pub(crate) async fn initialize_session_extension_data(
             .active_permission_profile
             .as_ref()
             .map(|value| value.id.clone()),
+        config_snapshot,
         log_user_prompt: config.telemetry.local.log_user_prompt,
         hash_prompts: config.telemetry.local.hash_prompts,
         write_run_summary: config.telemetry.local.write_run_summary,
@@ -87,6 +101,59 @@ pub(crate) async fn initialize_session_extension_data(
         raw_event_path,
         bootstrap,
     );
+}
+
+fn build_config_snapshot(
+    config: &Config,
+    developer_instructions_loaded: bool,
+    loaded_agents_md: Option<&LoadedAgentsMd>,
+) -> ConfigSnapshotSummary {
+    let config_sources = config
+        .config_layer_stack
+        .get_layers(
+            ConfigLayerStackOrdering::LowestPrecedenceFirst,
+            /*include_disabled*/ false,
+        )
+        .into_iter()
+        .map(|layer| ConfigSourceSummary {
+            kind: config_source_kind(&layer.name).to_string(),
+            source: format_config_layer_source(&layer.name, CONFIG_TOML_FILE),
+            profile: match &layer.name {
+                ConfigLayerSource::User { profile, .. } => profile.clone(),
+                _ => None,
+            },
+        })
+        .collect();
+    let user_instruction_source = loaded_agents_md
+        .and_then(LoadedAgentsMd::user_instructions)
+        .map(|instructions| instructions.source.display().to_string());
+    let project_instruction_sources = loaded_agents_md
+        .into_iter()
+        .flat_map(LoadedAgentsMd::sources)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+
+    ConfigSnapshotSummary {
+        config_sources,
+        developer_instructions_loaded,
+        user_instructions_loaded: user_instruction_source.is_some(),
+        user_instruction_source,
+        project_instructions_loaded: !project_instruction_sources.is_empty(),
+        project_instruction_sources,
+    }
+}
+
+fn config_source_kind(source: &ConfigLayerSource) -> &'static str {
+    match source {
+        ConfigLayerSource::Mdm { .. } => "mdm",
+        ConfigLayerSource::System { .. } => "system",
+        ConfigLayerSource::EnterpriseManaged { .. } => "enterprise_managed",
+        ConfigLayerSource::User { .. } => "user",
+        ConfigLayerSource::Project { .. } => "project",
+        ConfigLayerSource::SessionFlags => "session_flags",
+        ConfigLayerSource::LegacyManagedConfigTomlFromFile { .. } => "legacy_managed_file",
+        ConfigLayerSource::LegacyManagedConfigTomlFromMdm => "legacy_managed_mdm",
+    }
 }
 
 pub(crate) async fn update_session_stop_metadata(session: &Session) {
