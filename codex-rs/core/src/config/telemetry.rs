@@ -25,6 +25,7 @@ pub(crate) fn resolve_config(config: TelemetryConfigToml) -> TelemetryConfig {
             capture_config_snapshot: local.capture_config_snapshot.unwrap_or(true),
             capture_errors: local.capture_errors.unwrap_or(true),
             write_run_summary: local.write_run_summary.unwrap_or(true),
+            write_daily_rollups: local.write_daily_rollups.unwrap_or(true),
         },
     }
 }

@@ -56,6 +56,7 @@ fn jsonl_writer_uses_expected_event_and_summary_paths() {
         PathBuf::from("/tmp/telemetry"),
         chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
         "session-1".to_string(),
+        true,
     );
 
     assert_eq!(writer.root(), Path::new("/tmp/telemetry"));
@@ -100,6 +101,7 @@ async fn jsonl_writer_append_event_writes_jsonl_records() {
         test_dir.path().to_path_buf(),
         chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
         "session-1".to_string(),
+        true,
     );
     let first_event = sample_event("2026-06-17T12:00:00Z", TelemetryEventType::SessionStarted);
     let second_event = sample_event("2026-06-17T12:01:00Z", TelemetryEventType::TurnCompleted);
@@ -134,6 +136,7 @@ async fn jsonl_writer_write_summary_persists_pretty_json() {
         test_dir.path().to_path_buf(),
         chrono::NaiveDate::from_ymd_opt(2026, 6, 17).unwrap(),
         "session-1".to_string(),
+        true,
     );
     let summary = sample_summary(
         writer.raw_event_path().display().to_string(),
@@ -158,6 +161,17 @@ async fn jsonl_writer_write_summary_persists_pretty_json() {
             serde_json::to_string_pretty(&actual_summary).unwrap()
         )
     );
+    let rollup = serde_json::from_str::<DailyRollup>(
+        &std::fs::read_to_string(rollup_file_path(test_dir.path(), "2026-06-17"))
+            .expect("rollup file should be readable"),
+    )
+    .expect("rollup file should deserialize");
+    assert_eq!(rollup.date, "2026-06-17");
+    assert_eq!(rollup.totals.sessions, 1);
+    assert_eq!(rollup.totals.total_tokens, 17);
+    assert_eq!(rollup.totals.tool_calls, 2);
+    assert_eq!(rollup.by_model["gpt-5-codex"].total_tokens, 17);
+    assert_eq!(rollup.by_effort["medium"].sessions, 1);
 }
 
 fn sample_event(timestamp: &str, event_type: TelemetryEventType) -> TelemetryEvent {
