@@ -9,6 +9,8 @@ use chrono::Utc;
 use pretty_assertions::assert_eq;
 
 use crate::ChangedFilesSummary;
+use crate::ConfigSnapshotSummary;
+use crate::ConfigSourceSummary;
 use crate::LocalTelemetryStore;
 use crate::PromptMetadataSummary;
 use crate::SessionSummary;
@@ -212,9 +214,22 @@ fn sample_summary(
         reasoning_effort: Some("medium".to_string()),
         approval_policy: Some("on-request".to_string()),
         sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
         cwd: Some("/workspace".to_string()),
         repo_root: None,
         git: None,
+        config_snapshot: Some(ConfigSnapshotSummary {
+            config_sources: vec![ConfigSourceSummary {
+                kind: "user".to_string(),
+                source: "user (/tmp/.codex/config.toml)".to_string(),
+                profile: Some("safe".to_string()),
+            }],
+            developer_instructions_loaded: true,
+            user_instructions_loaded: false,
+            user_instruction_source: None,
+            project_instructions_loaded: false,
+            project_instruction_sources: Vec::new(),
+        }),
         prompt_metadata: PromptMetadataSummary::default(),
         raw_event_path: event_path(root, session_id).display().to_string(),
         rollout_path: None,

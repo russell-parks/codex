@@ -16,6 +16,8 @@ pub use schema::TelemetryEvent;
 pub use schema::TelemetryEventType;
 pub use summary::ApprovalSummary;
 pub use summary::ChangedFilesSummary;
+pub use summary::ConfigSnapshotSummary;
+pub use summary::ConfigSourceSummary;
 pub use summary::ErrorSummary;
 pub use summary::GitSummary;
 pub use summary::PromptMetadataSummary;

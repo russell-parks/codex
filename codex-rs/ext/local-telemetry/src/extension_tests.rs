@@ -16,6 +16,8 @@ use codex_extension_api::TurnErrorInput;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_local_telemetry::ChangedFilesSummary;
+use codex_local_telemetry::ConfigSnapshotSummary;
+use codex_local_telemetry::ConfigSourceSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::SessionSummary;
@@ -116,6 +118,25 @@ impl Harness {
                 approval_policy: "on-failure".to_string(),
                 sandbox_mode: "workspace-write".to_string(),
                 active_profile: Some("safe".to_string()),
+                config_snapshot: Some(ConfigSnapshotSummary {
+                    config_sources: vec![
+                        ConfigSourceSummary {
+                            kind: "system".to_string(),
+                            source: "system (/etc/codex/config.toml)".to_string(),
+                            profile: None,
+                        },
+                        ConfigSourceSummary {
+                            kind: "user".to_string(),
+                            source: "user (/tmp/.codex/config.toml)".to_string(),
+                            profile: Some("safe".to_string()),
+                        },
+                    ],
+                    developer_instructions_loaded: true,
+                    user_instructions_loaded: false,
+                    user_instruction_source: None,
+                    project_instructions_loaded: true,
+                    project_instruction_sources: vec!["/tmp/AGENTS.md".to_string()],
+                }),
                 log_user_prompt: false,
                 hash_prompts: true,
                 write_run_summary: true,
@@ -244,6 +265,11 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
     );
     assert!(events[0].payload["resumed_from"].is_string());
     assert!(events[0].payload["forked_from"].is_string());
+    assert_eq!(events[0].payload["active_profile"], "safe");
+    assert_eq!(
+        events[0].payload["config_snapshot"]["project_instruction_sources"][0],
+        "/tmp/AGENTS.md"
+    );
     assert_eq!(events[1].payload["rollout_path"], "/tmp/final.rollout");
     assert_eq!(events[1].payload["changed_files_summary"]["insertions"], 12);
 
@@ -262,6 +288,7 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
         reasoning_effort: Some("medium".to_string()),
         approval_policy: Some("on-failure".to_string()),
         sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
         cwd: Some("/tmp/worktree".to_string()),
         repo_root: Some("/tmp".to_string()),
         git: Some(GitSummary {
@@ -271,6 +298,25 @@ async fn thread_lifecycle_writes_session_started_and_completed() {
             commit_sha_after: Some("def456".to_string()),
             dirty_before: Some(false),
             dirty_after: Some(true),
+        }),
+        config_snapshot: Some(ConfigSnapshotSummary {
+            config_sources: vec![
+                ConfigSourceSummary {
+                    kind: "system".to_string(),
+                    source: "system (/etc/codex/config.toml)".to_string(),
+                    profile: None,
+                },
+                ConfigSourceSummary {
+                    kind: "user".to_string(),
+                    source: "user (/tmp/.codex/config.toml)".to_string(),
+                    profile: Some("safe".to_string()),
+                },
+            ],
+            developer_instructions_loaded: true,
+            user_instructions_loaded: false,
+            user_instruction_source: None,
+            project_instructions_loaded: true,
+            project_instruction_sources: vec!["/tmp/AGENTS.md".to_string()],
         }),
         prompt_metadata: Default::default(),
         raw_event_path: "/tmp/raw-events.jsonl".to_string(),
@@ -471,6 +517,7 @@ async fn prompt_text_is_stored_only_when_enabled() {
             approval_policy: "never".to_string(),
             sandbox_mode: "workspace-write".to_string(),
             active_profile: None,
+            config_snapshot: None,
             log_user_prompt: true,
             hash_prompts: false,
             write_run_summary: false,
@@ -548,6 +595,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             approval_policy: "on-failure".to_string(),
             sandbox_mode: "workspace-write".to_string(),
             active_profile: None,
+            config_snapshot: None,
             log_user_prompt: false,
             hash_prompts: true,
             write_run_summary: true,
