@@ -16,9 +16,11 @@ pub struct SessionSummary {
     pub reasoning_effort: Option<String>,
     pub approval_policy: Option<String>,
     pub sandbox_mode: Option<String>,
+    pub active_profile: Option<String>,
     pub cwd: Option<String>,
     pub repo_root: Option<String>,
     pub git: Option<GitSummary>,
+    pub config_snapshot: Option<ConfigSnapshotSummary>,
     pub prompt_metadata: PromptMetadataSummary,
     pub raw_event_path: String,
     pub rollout_path: Option<String>,
@@ -30,6 +32,23 @@ pub struct SessionSummary {
     pub changed_files_summary: ChangedFilesSummary,
     pub resumed_from: Option<String>,
     pub forked_from: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigSnapshotSummary {
+    pub config_sources: Vec<ConfigSourceSummary>,
+    pub developer_instructions_loaded: bool,
+    pub user_instructions_loaded: bool,
+    pub user_instruction_source: Option<String>,
+    pub project_instructions_loaded: bool,
+    pub project_instruction_sources: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConfigSourceSummary {
+    pub kind: String,
+    pub source: String,
+    pub profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
