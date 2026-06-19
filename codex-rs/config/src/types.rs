@@ -270,6 +270,8 @@ pub struct LocalTelemetryConfigToml {
     pub capture_errors: Option<bool>,
     /// Write a derived per-session summary JSON file.
     pub write_run_summary: Option<bool>,
+    /// Write derived daily rollup JSON files grouped by day.
+    pub write_daily_rollups: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,6 +298,7 @@ pub struct LocalTelemetryConfig {
     pub capture_config_snapshot: bool,
     pub capture_errors: bool,
     pub write_run_summary: bool,
+    pub write_daily_rollups: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]

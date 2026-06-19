@@ -5485,13 +5485,14 @@ async fn load_config_applies_local_telemetry_defaults() -> std::io::Result<()> {
 
     let config = ConfigBuilder::default()
         .codex_home(home.path().to_path_buf())
-        .load()
+        .build()
         .await?;
 
     assert!(config.telemetry.local.enabled);
     assert_eq!(config.telemetry.local.directory, "~/.codex/telemetry");
     assert!(config.telemetry.local.hash_prompts);
     assert!(!config.telemetry.local.log_user_prompt);
+    assert!(config.telemetry.local.write_daily_rollups);
     Ok(())
 }
 
