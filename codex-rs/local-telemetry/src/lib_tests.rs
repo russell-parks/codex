@@ -187,6 +187,7 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
         reasoning_effort: Some("medium".to_string()),
         approval_policy: Some("on-request".to_string()),
         sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
         cwd: Some("/workspace".to_string()),
         repo_root: Some("/workspace".to_string()),
         git: Some(GitSummary {
@@ -196,6 +197,18 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
             commit_sha_after: Some("def456".to_string()),
             dirty_before: Some(false),
             dirty_after: Some(true),
+        }),
+        config_snapshot: Some(ConfigSnapshotSummary {
+            config_sources: vec![ConfigSourceSummary {
+                kind: "user".to_string(),
+                source: "user (/workspace/.codex/config.toml)".to_string(),
+                profile: Some("safe".to_string()),
+            }],
+            developer_instructions_loaded: true,
+            user_instructions_loaded: false,
+            user_instruction_source: None,
+            project_instructions_loaded: true,
+            project_instruction_sources: vec!["/workspace/AGENTS.md".to_string()],
         }),
         prompt_metadata: PromptMetadataSummary {
             prompt_byte_length: 13,

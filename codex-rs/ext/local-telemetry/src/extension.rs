@@ -20,6 +20,7 @@ use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
 use codex_local_telemetry::ChangedFilesSummary;
+use codex_local_telemetry::ConfigSnapshotSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::NoopTelemetryWriter;
@@ -52,6 +53,7 @@ pub struct SessionTelemetryBootstrap {
     pub approval_policy: String,
     pub sandbox_mode: String,
     pub active_profile: Option<String>,
+    pub config_snapshot: Option<ConfigSnapshotSummary>,
     pub log_user_prompt: bool,
     pub hash_prompts: bool,
     pub write_run_summary: bool,
@@ -106,9 +108,15 @@ where
                     .as_ref()
                     .map(|value| value.approval_policy.clone()),
                 sandbox_mode: bootstrap.as_ref().map(|value| value.sandbox_mode.clone()),
+                active_profile: bootstrap
+                    .as_ref()
+                    .and_then(|value| value.active_profile.clone()),
                 cwd: bootstrap.as_ref().map(|value| value.cwd.clone()),
                 repo_root: bootstrap.as_ref().and_then(|value| value.repo_root.clone()),
                 git: bootstrap.as_ref().and_then(|value| value.git.clone()),
+                config_snapshot: bootstrap
+                    .as_ref()
+                    .and_then(|value| value.config_snapshot.clone()),
                 prompt_metadata: Default::default(),
                 raw_event_path: writer_handle
                     .as_ref()
@@ -206,6 +214,9 @@ where
                         "active_profile": bootstrap
                             .as_ref()
                             .and_then(|value| value.active_profile.clone()),
+                        "config_snapshot": bootstrap
+                            .as_ref()
+                            .and_then(|value| value.config_snapshot.clone()),
                         "log_user_prompt": bootstrap
                             .as_ref()
                             .map(|value| value.log_user_prompt),

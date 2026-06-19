@@ -8,6 +8,8 @@ use crate::telemetry_cmd::build_report_rows;
 use crate::telemetry_cmd::csv_field;
 use crate::telemetry_cmd::parse_duration;
 use codex_local_telemetry::ChangedFilesSummary;
+use codex_local_telemetry::ConfigSnapshotSummary;
+use codex_local_telemetry::ConfigSourceSummary;
 use codex_local_telemetry::PromptMetadataSummary;
 use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
@@ -79,9 +81,22 @@ fn sample_summary(
         reasoning_effort: reasoning_effort.map(str::to_string),
         approval_policy: Some("on-request".to_string()),
         sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
         cwd: Some("/workspace".to_string()),
         repo_root: Some(PathBuf::from("/workspace").display().to_string()),
         git: None,
+        config_snapshot: Some(ConfigSnapshotSummary {
+            config_sources: vec![ConfigSourceSummary {
+                kind: "user".to_string(),
+                source: "user (/workspace/.codex/config.toml)".to_string(),
+                profile: Some("safe".to_string()),
+            }],
+            developer_instructions_loaded: true,
+            user_instructions_loaded: false,
+            user_instruction_source: None,
+            project_instructions_loaded: false,
+            project_instruction_sources: Vec::new(),
+        }),
         prompt_metadata: PromptMetadataSummary::default(),
         raw_event_path: "/workspace/events.jsonl".to_string(),
         rollout_path: None,
