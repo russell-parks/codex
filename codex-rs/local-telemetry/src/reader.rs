@@ -5,8 +5,10 @@ use std::path::PathBuf;
 
 use chrono::DateTime;
 use chrono::FixedOffset;
+use chrono::NaiveDate;
 use chrono::Utc;
 
+use crate::DailyRollup;
 use crate::SessionSummary;
 use crate::TelemetryEvent;
 
@@ -19,6 +21,7 @@ pub struct LocalTelemetryStore {
 pub struct PruneResult {
     pub removed_summaries: u64,
     pub removed_event_files: u64,
+    pub removed_rollups: u64,
 }
 
 impl LocalTelemetryStore {
@@ -36,6 +39,10 @@ impl LocalTelemetryStore {
 
     pub fn events_dir(&self) -> PathBuf {
         self.root.join("events")
+    }
+
+    pub fn rollups_dir(&self) -> PathBuf {
+        self.root.join("rollups")
     }
 
     pub fn list_summaries(&self) -> io::Result<Vec<SessionSummary>> {
@@ -64,6 +71,22 @@ impl LocalTelemetryStore {
         let payload = fs::read_to_string(path)?;
         let summary: SessionSummary = serde_json::from_str(&payload).map_err(io::Error::other)?;
         Ok(Some(summary))
+    }
+
+    pub fn list_rollups(&self) -> io::Result<Vec<DailyRollup>> {
+        let mut rollups = Vec::new();
+        for path in walk_files(self.rollups_dir().as_path())? {
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+
+            let payload = fs::read_to_string(path)?;
+            let rollup: DailyRollup = serde_json::from_str(&payload).map_err(io::Error::other)?;
+            rollups.push(rollup);
+        }
+
+        rollups.sort_by(|left, right| right.date.cmp(&left.date));
+        Ok(rollups)
     }
 
     pub fn disk_usage_bytes(&self) -> io::Result<u64> {
@@ -115,6 +138,26 @@ impl LocalTelemetryStore {
                 cleanup_empty_parents(raw_event_path.parent(), self.events_dir().as_path())?;
                 result.removed_event_files += 1;
             }
+        }
+
+        let cutoff_date = cutoff.date_naive();
+        for path in walk_files(self.rollups_dir().as_path())? {
+            if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(stem) = path.file_stem().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            let Ok(date) = NaiveDate::parse_from_str(stem, "%Y-%m-%d") else {
+                continue;
+            };
+            if date >= cutoff_date {
+                continue;
+            }
+
+            fs::remove_file(&path)?;
+            cleanup_empty_parents(path.parent(), self.rollups_dir().as_path())?;
+            result.removed_rollups += 1;
         }
 
         Ok(result)

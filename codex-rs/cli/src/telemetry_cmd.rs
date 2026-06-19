@@ -11,6 +11,7 @@ use codex_config::types::OtelExporterKind;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::LoaderOverrides;
+use codex_local_telemetry::DailyRollup;
 use codex_local_telemetry::LocalTelemetryStore;
 use codex_local_telemetry::SessionSummary;
 use codex_utils_cli::CliConfigOverrides;
@@ -335,13 +336,18 @@ fn run_show(loaded: &LoadedTelemetry, args: ShowArgs) -> Result<()> {
 }
 
 fn run_report(loaded: &LoadedTelemetry, args: ReportArgs) -> Result<()> {
-    let summaries = filter_summaries(
-        loaded.store.list_summaries()?,
-        args.since.as_deref(),
-        None,
-        None,
-    )?;
-    let rows = build_report_rows(&summaries, args.group_by);
+    let rows = if matches!(args.group_by, GroupBy::Day) {
+        let rollups = filter_rollups(loaded.store.list_rollups()?, args.since.as_deref())?;
+        build_report_rows_from_rollups(&rollups)
+    } else {
+        let summaries = filter_summaries(
+            loaded.store.list_summaries()?,
+            args.since.as_deref(),
+            None,
+            None,
+        )?;
+        build_report_rows(&summaries, args.group_by)
+    };
 
     match args.format {
         OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
@@ -383,6 +389,7 @@ fn run_prune(loaded: &LoadedTelemetry, args: PruneArgs) -> Result<()> {
     let result = loaded.store.prune_older_than(cutoff)?;
     println!("removed_summaries: {}", result.removed_summaries);
     println!("removed_event_files: {}", result.removed_event_files);
+    println!("removed_rollups: {}", result.removed_rollups);
     Ok(())
 }
 
@@ -503,6 +510,25 @@ fn summary_row(summary: SessionSummary) -> SessionRow {
     }
 }
 
+fn filter_rollups(rollups: Vec<DailyRollup>, since: Option<&str>) -> Result<Vec<DailyRollup>> {
+    let since = since.map(parse_duration).transpose()?;
+    let cutoff = since.map(|duration| chrono::Utc::now() - duration);
+
+    let mut filtered = Vec::new();
+    for rollup in rollups {
+        if let Some(cutoff) = cutoff {
+            let date = chrono::NaiveDate::parse_from_str(&rollup.date, "%Y-%m-%d")
+                .map_err(std::io::Error::other)?;
+            if date < cutoff.date_naive() {
+                continue;
+            }
+        }
+        filtered.push(rollup);
+    }
+
+    Ok(filtered)
+}
+
 fn build_report_rows(summaries: &[SessionSummary], group_by: GroupBy) -> Vec<ReportRow> {
     let mut by_key = std::collections::BTreeMap::<String, ReportRow>::new();
     for summary in summaries {
@@ -527,6 +553,22 @@ fn build_report_rows(summaries: &[SessionSummary], group_by: GroupBy) -> Vec<Rep
     }
 
     by_key.into_values().collect()
+}
+
+fn build_report_rows_from_rollups(rollups: &[DailyRollup]) -> Vec<ReportRow> {
+    rollups
+        .iter()
+        .map(|rollup| ReportRow {
+            key: rollup.date.clone(),
+            sessions: rollup.totals.sessions,
+            total_tokens: rollup.totals.total_tokens,
+            cached_input_tokens: rollup.totals.cached_input_tokens,
+            output_tokens: rollup.totals.output_tokens,
+            reasoning_tokens: rollup.totals.reasoning_tokens,
+            tool_calls: rollup.totals.tool_calls,
+            duration_ms: rollup.totals.duration_ms,
+        })
+        .collect()
 }
 
 fn report_key(summary: &SessionSummary, group_by: GroupBy) -> String {

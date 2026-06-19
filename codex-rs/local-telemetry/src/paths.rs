@@ -14,3 +14,7 @@ pub fn event_file_path(root: &Path, date: chrono::NaiveDate, session_id: &str) -
 pub fn summary_file_path(root: &Path, session_id: &str) -> PathBuf {
     root.join("runs").join(format!("{session_id}.json"))
 }
+
+pub fn rollup_file_path(root: &Path, date: &str) -> PathBuf {
+    root.join("rollups").join(format!("{date}.json"))
+}

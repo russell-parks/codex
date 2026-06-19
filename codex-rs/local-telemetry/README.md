@@ -19,6 +19,7 @@ By default Codex stores local telemetry under `~/.codex/telemetry`:
 ~/.codex/telemetry/
   events/YYYY/MM/DD/<session-id>.jsonl
   runs/<session-id>.json
+  rollups/YYYY-MM-DD.json
 ```
 
 Raw events are append-only JSONL records:
@@ -66,6 +67,7 @@ capture_errors = true
 
 # Derived artifacts
 write_run_summary = true
+write_daily_rollups = true
 ```
 
 Privacy defaults are conservative:

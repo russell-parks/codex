@@ -51,6 +51,7 @@ pub(crate) async fn initialize_session_extension_data(
         telemetry_root,
         Utc::now().date_naive(),
         thread_id.to_string(),
+        config.telemetry.local.write_daily_rollups,
     );
     let raw_event_path = writer.raw_event_path().display().to_string();
     let writer: Arc<dyn LocalTelemetryWriter> = Arc::new(writer);

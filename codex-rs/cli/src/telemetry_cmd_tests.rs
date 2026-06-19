@@ -5,12 +5,15 @@ use pretty_assertions::assert_eq;
 
 use crate::telemetry_cmd::GroupBy;
 use crate::telemetry_cmd::build_report_rows;
+use crate::telemetry_cmd::build_report_rows_from_rollups;
 use crate::telemetry_cmd::csv_field;
 use crate::telemetry_cmd::parse_duration;
 use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::ConfigSnapshotSummary;
 use codex_local_telemetry::ConfigSourceSummary;
+use codex_local_telemetry::DailyRollup;
 use codex_local_telemetry::PromptMetadataSummary;
+use codex_local_telemetry::RollupBucket;
 use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_local_telemetry::TurnCounts;
@@ -61,6 +64,53 @@ fn report_groups_by_effort() {
 #[test]
 fn csv_field_escapes_quotes() {
     assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+}
+
+#[test]
+fn day_report_rows_use_rollup_totals() {
+    let rows = build_report_rows_from_rollups(&[
+        DailyRollup {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            date: "2026-06-18".to_string(),
+            totals: RollupBucket {
+                sessions: 3,
+                total_tokens: 42,
+                cached_input_tokens: 7,
+                reasoning_tokens: 5,
+                tool_calls: 9,
+                duration_ms: 600,
+                ..RollupBucket::default()
+            },
+            by_model: Default::default(),
+            by_effort: Default::default(),
+            by_repo: Default::default(),
+            by_mode: Default::default(),
+        },
+        DailyRollup {
+            schema_version: TELEMETRY_SCHEMA_VERSION,
+            date: "2026-06-17".to_string(),
+            totals: RollupBucket {
+                sessions: 1,
+                total_tokens: 10,
+                cached_input_tokens: 2,
+                reasoning_tokens: 1,
+                tool_calls: 3,
+                duration_ms: 120,
+                ..RollupBucket::default()
+            },
+            by_model: Default::default(),
+            by_effort: Default::default(),
+            by_repo: Default::default(),
+            by_mode: Default::default(),
+        },
+    ]);
+
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].key, "2026-06-18");
+    assert_eq!(rows[0].sessions, 3);
+    assert_eq!(rows[0].total_tokens, 42);
+    assert_eq!(rows[1].key, "2026-06-17");
+    assert_eq!(rows[1].cached_input_tokens, 2);
 }
 
 fn sample_summary(

@@ -11,6 +11,7 @@ use pretty_assertions::assert_eq;
 use crate::ChangedFilesSummary;
 use crate::ConfigSnapshotSummary;
 use crate::ConfigSourceSummary;
+use crate::DailyRollup;
 use crate::LocalTelemetryStore;
 use crate::PromptMetadataSummary;
 use crate::SessionSummary;
@@ -110,6 +111,8 @@ fn prune_older_than_removes_old_summaries_and_event_files() {
         "session-new",
         &[sample_event("2026-06-17T10:05:00Z", "session-new")],
     );
+    write_rollup(test_dir.path(), DailyRollup::new("2026-06-01".to_string()));
+    write_rollup(test_dir.path(), DailyRollup::new("2026-06-17".to_string()));
 
     let store = LocalTelemetryStore::new(test_dir.path().to_path_buf());
     let result = store
@@ -118,10 +121,13 @@ fn prune_older_than_removes_old_summaries_and_event_files() {
 
     assert_eq!(result.removed_summaries, 1);
     assert_eq!(result.removed_event_files, 1);
+    assert_eq!(result.removed_rollups, 1);
     assert!(!test_dir.path().join("runs/session-old.json").exists());
     assert!(!event_path(test_dir.path(), "session-old").exists());
+    assert!(!rollup_path(test_dir.path(), "2026-06-01").exists());
     assert!(test_dir.path().join("runs/session-new.json").exists());
     assert!(event_path(test_dir.path(), "session-new").exists());
+    assert!(rollup_path(test_dir.path(), "2026-06-17").exists());
 }
 
 #[test]
@@ -145,6 +151,24 @@ fn disk_usage_counts_summary_and_event_files() {
     let store = LocalTelemetryStore::new(test_dir.path().to_path_buf());
 
     assert!(store.disk_usage_bytes().expect("disk usage should load") > 0);
+}
+
+#[test]
+fn list_rollups_returns_newest_first() {
+    let test_dir = TestDir::new();
+    write_rollup(test_dir.path(), DailyRollup::new("2026-06-17".to_string()));
+    write_rollup(test_dir.path(), DailyRollup::new("2026-06-18".to_string()));
+
+    let store = LocalTelemetryStore::new(test_dir.path().to_path_buf());
+    let rollups = store.list_rollups().expect("rollups should load");
+
+    assert_eq!(
+        rollups
+            .iter()
+            .map(|rollup| rollup.date.as_str())
+            .collect::<Vec<_>>(),
+        vec!["2026-06-18", "2026-06-17"]
+    );
 }
 
 fn write_summary(root: &Path, summary: SessionSummary) {
@@ -175,12 +199,30 @@ fn write_event_file(root: &Path, session_id: &str, events: &[TelemetryEvent]) {
     fs::write(path, format!("{payload}\n")).expect("event file should write");
 }
 
+fn write_rollup(root: &Path, rollup: DailyRollup) {
+    let path = rollup_path(root, &rollup.date);
+    fs::create_dir_all(path.parent().expect("rollup parent should exist"))
+        .expect("rollup parent should be creatable");
+    fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&rollup).expect("rollup should serialize")
+        ),
+    )
+    .expect("rollup should write");
+}
+
 fn event_path(root: &Path, session_id: &str) -> PathBuf {
     root.join("events")
         .join("2026")
         .join("06")
         .join("17")
         .join(format!("{session_id}.jsonl"))
+}
+
+fn rollup_path(root: &Path, date: &str) -> PathBuf {
+    root.join("rollups").join(format!("{date}.json"))
 }
 
 fn sample_event(timestamp: &str, session_id: &str) -> TelemetryEvent {
