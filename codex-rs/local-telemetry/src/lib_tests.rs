@@ -172,6 +172,8 @@ async fn jsonl_writer_write_summary_persists_pretty_json() {
     assert_eq!(rollup.totals.tool_calls, 2);
     assert_eq!(rollup.by_model["gpt-5-codex"].total_tokens, 17);
     assert_eq!(rollup.by_effort["medium"].sessions, 1);
+    assert_eq!(rollup.by_task_type["regular"].sessions, 1);
+    assert_eq!(rollup.by_task_type["review"].sessions, 1);
 }
 
 fn sample_event(timestamp: &str, event_type: TelemetryEventType) -> TelemetryEvent {
@@ -195,6 +197,9 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
         started_at: "2026-06-17T12:00:00Z".to_string(),
         ended_at,
         duration_ms: Some(300_000),
+        final_outcome: Some("completed".to_string()),
+        abort_reason: None,
+        exit_status_code: Some(0),
         invocation_mode: "cli".to_string(),
         session_source: "interactive".to_string(),
         model: Some("gpt-5-codex".to_string()),
@@ -240,6 +245,14 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
             reasoning_tokens: 2,
             cached_input_tokens: 0,
             total_tokens: 17,
+            last_token_usage: Some(TokenUsageSummary {
+                input_tokens: 4,
+                output_tokens: 2,
+                reasoning_tokens: 1,
+                cached_input_tokens: 0,
+                total_tokens: 7,
+            }),
+            model_context_window: Some(128_000),
         },
         turn_counts: TurnCounts {
             started: 1,
@@ -251,7 +264,20 @@ fn sample_summary(raw_event_path: String, ended_at: Option<String>) -> SessionSu
             total_calls: 2,
             success_count: 2,
             failure_count: 0,
+            total_duration_ms: 250,
+            shell_command_count: 1,
+            file_read_count: 0,
+            file_write_count: 0,
+            file_edit_count: 1,
         },
+        runtime_summary: RuntimeSummary {
+            api_request_count: 3,
+            retry_count: 1,
+            latest_rate_limits: None,
+            bytes_read: None,
+            bytes_written: None,
+        },
+        task_types: vec!["regular".to_string(), "review".to_string()],
         approval_summary: ApprovalSummary {
             total_requests: 1,
             approved_count: 1,

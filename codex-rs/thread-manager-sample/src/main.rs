@@ -50,6 +50,7 @@ use codex_core_api::SessionSource;
 use codex_core_api::SqliteConfig;
 use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
+use codex_core_api::TelemetryConfig;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -393,6 +394,7 @@ async fn new_config(
         analytics_enabled: Some(false),
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
+        telemetry: TelemetryConfig::default(),
         otel: OtelConfig::default(),
     };
     config

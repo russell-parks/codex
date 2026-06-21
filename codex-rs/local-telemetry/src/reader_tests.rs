@@ -12,6 +12,7 @@ use crate::ChangedFilesSummary;
 use crate::ConfigSnapshotSummary;
 use crate::ConfigSourceSummary;
 use crate::DailyRollup;
+use crate::LocalTelemetryDoctorReport;
 use crate::LocalTelemetryStore;
 use crate::PromptMetadataSummary;
 use crate::SessionSummary;
@@ -171,6 +172,55 @@ fn list_rollups_returns_newest_first() {
     );
 }
 
+#[test]
+fn doctor_report_counts_rollups_missing_events_and_orphans() {
+    let test_dir = TestDir::new();
+    write_summary(
+        test_dir.path(),
+        sample_summary(
+            test_dir.path(),
+            "session-1",
+            "2026-06-17T10:00:00Z",
+            "2026-06-17T10:05:00Z",
+        ),
+    );
+    let mut missing_event_summary = sample_summary(
+        test_dir.path(),
+        "session-2",
+        "2026-06-17T11:00:00Z",
+        "2026-06-17T11:05:00Z",
+    );
+    missing_event_summary.raw_event_path = event_path(test_dir.path(), "missing-session")
+        .display()
+        .to_string();
+    write_summary(test_dir.path(), missing_event_summary);
+    write_event_file(
+        test_dir.path(),
+        "session-1",
+        &[sample_event("2026-06-17T10:05:00Z", "session-1")],
+    );
+    write_event_file(
+        test_dir.path(),
+        "orphaned-session",
+        &[sample_event("2026-06-17T12:05:00Z", "orphaned-session")],
+    );
+    write_rollup(test_dir.path(), DailyRollup::new("2026-06-17".to_string()));
+
+    let store = LocalTelemetryStore::new(test_dir.path().to_path_buf());
+
+    assert_eq!(
+        store.doctor_report().expect("doctor report should load"),
+        LocalTelemetryDoctorReport {
+            directory_exists: true,
+            summaries: 2,
+            event_files: 2,
+            rollups: 1,
+            missing_event_files: 1,
+            orphaned_event_files: 1,
+        }
+    );
+}
+
 fn write_summary(root: &Path, summary: SessionSummary) {
     let path = root
         .join("runs")
@@ -250,6 +300,9 @@ fn sample_summary(
         started_at: started_at.to_string(),
         ended_at: Some(ended_at.to_string()),
         duration_ms: Some(300_000),
+        final_outcome: Some("completed".to_string()),
+        abort_reason: None,
+        exit_status_code: Some(0),
         invocation_mode: "exec".to_string(),
         session_source: "exec".to_string(),
         model: Some("gpt-5".to_string()),
@@ -278,6 +331,8 @@ fn sample_summary(
         usage_totals: UsageTotals::default(),
         turn_counts: TurnCounts::default(),
         tool_summary: Default::default(),
+        runtime_summary: Default::default(),
+        task_types: vec!["regular".to_string()],
         approval_summary: Default::default(),
         error_summary: Default::default(),
         changed_files_summary: ChangedFilesSummary::default(),

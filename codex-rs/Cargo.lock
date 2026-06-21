@@ -2569,6 +2569,7 @@ dependencies = [
  "codex-utils-redacted-string",
  "codex-websocket-auth",
  "codex-windows-sandbox",
+ "core_test_support",
  "crossterm",
  "flate2",
  "futures",
@@ -3184,6 +3185,7 @@ dependencies = [
  "codex-feedback",
  "codex-git-utils",
  "codex-history",
+ "codex-local-telemetry",
  "codex-login",
  "codex-model-provider-info",
  "codex-otel",
@@ -3853,6 +3855,7 @@ name = "codex-local-telemetry-extension"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "codex-analytics",
  "codex-extension-api",
  "codex-local-telemetry",
  "codex-protocol",

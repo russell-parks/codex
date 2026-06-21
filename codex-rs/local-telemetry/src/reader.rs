@@ -24,6 +24,16 @@ pub struct PruneResult {
     pub removed_rollups: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LocalTelemetryDoctorReport {
+    pub directory_exists: bool,
+    pub summaries: u64,
+    pub event_files: u64,
+    pub rollups: u64,
+    pub missing_event_files: u64,
+    pub orphaned_event_files: u64,
+}
+
 impl LocalTelemetryStore {
     pub fn new(root: PathBuf) -> Self {
         Self { root }
@@ -111,6 +121,37 @@ impl LocalTelemetryStore {
         }
 
         Ok(latest.map(|value| value.to_rfc3339()))
+    }
+
+    pub fn doctor_report(&self) -> io::Result<LocalTelemetryDoctorReport> {
+        let summaries = self.list_summaries()?;
+        let event_files = walk_files(self.events_dir().as_path())?
+            .into_iter()
+            .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("jsonl"))
+            .collect::<Vec<_>>();
+        let rollups = self.list_rollups()?;
+
+        let referenced_event_files = summaries
+            .iter()
+            .map(|summary| PathBuf::from(&summary.raw_event_path))
+            .collect::<std::collections::BTreeSet<_>>();
+        let missing_event_files = summaries
+            .iter()
+            .filter(|summary| !PathBuf::from(&summary.raw_event_path).exists())
+            .count();
+        let orphaned_event_files = event_files
+            .iter()
+            .filter(|path| !referenced_event_files.contains(*path))
+            .count();
+
+        Ok(LocalTelemetryDoctorReport {
+            directory_exists: self.root.exists(),
+            summaries: u64::try_from(summaries.len()).unwrap_or(u64::MAX),
+            event_files: u64::try_from(event_files.len()).unwrap_or(u64::MAX),
+            rollups: u64::try_from(rollups.len()).unwrap_or(u64::MAX),
+            missing_event_files: u64::try_from(missing_event_files).unwrap_or(u64::MAX),
+            orphaned_event_files: u64::try_from(orphaned_event_files).unwrap_or(u64::MAX),
+        })
     }
 
     pub fn prune_older_than(&self, cutoff: DateTime<Utc>) -> io::Result<PruneResult> {

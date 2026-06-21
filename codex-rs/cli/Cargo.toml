@@ -128,6 +128,7 @@ codex-app-server-client = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
 codex-utils-pty = { workspace = true }
 flate2 = { workspace = true }
+core_test_support = { workspace = true }
 insta = { workspace = true }
 jsonwebtoken = { workspace = true }
 predicates = { workspace = true }

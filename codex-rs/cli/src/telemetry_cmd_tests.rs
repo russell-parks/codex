@@ -4,6 +4,7 @@ use std::time::Duration;
 use pretty_assertions::assert_eq;
 
 use crate::telemetry_cmd::GroupBy;
+use crate::telemetry_cmd::build_report_insights;
 use crate::telemetry_cmd::build_report_rows;
 use crate::telemetry_cmd::build_report_rows_from_rollups;
 use crate::telemetry_cmd::csv_field;
@@ -85,6 +86,7 @@ fn day_report_rows_use_rollup_totals() {
             by_effort: Default::default(),
             by_repo: Default::default(),
             by_mode: Default::default(),
+            by_task_type: Default::default(),
         },
         DailyRollup {
             schema_version: TELEMETRY_SCHEMA_VERSION,
@@ -102,6 +104,7 @@ fn day_report_rows_use_rollup_totals() {
             by_effort: Default::default(),
             by_repo: Default::default(),
             by_mode: Default::default(),
+            by_task_type: Default::default(),
         },
     ]);
 
@@ -111,6 +114,45 @@ fn day_report_rows_use_rollup_totals() {
     assert_eq!(rows[0].total_tokens, 42);
     assert_eq!(rows[1].key, "2026-06-17");
     assert_eq!(rows[1].cached_input_tokens, 2);
+}
+
+#[test]
+fn report_insights_surface_expected_sessions() {
+    let mut no_change = sample_summary("session-no-change", Some("gpt-5"), Some("medium"), 50);
+    no_change.tool_summary.total_calls = 2;
+    no_change.usage_totals.reasoning_tokens = 10;
+    no_change.error_summary.error_count = 1;
+    no_change.changed_files_summary = ChangedFilesSummary::default();
+
+    let mut with_changes = sample_summary("session-with-changes", Some("gpt-5"), Some("high"), 20);
+    with_changes.tool_summary.total_calls = 9;
+    with_changes.changed_files_summary.paths = vec!["src/main.rs".to_string()];
+
+    let mut aborted = sample_summary("session-aborted", Some("gpt-4.1"), Some("low"), 30);
+    aborted.turn_counts.aborted = 1;
+
+    let insights = build_report_insights(&[no_change.clone(), with_changes, aborted.clone()]);
+
+    assert_eq!(
+        insights.high_token_without_changes[0].session_id,
+        no_change.session_id
+    );
+    assert_eq!(
+        insights.high_reasoning_sessions[0].session_id,
+        no_change.session_id
+    );
+    assert_eq!(
+        insights.many_tool_call_sessions[0].session_id,
+        "session-with-changes"
+    );
+    assert_eq!(
+        insights.high_token_failures[0].session_id,
+        no_change.session_id
+    );
+    assert_eq!(
+        insights.high_token_failures[1].session_id,
+        aborted.session_id
+    );
 }
 
 fn sample_summary(
@@ -125,6 +167,9 @@ fn sample_summary(
         started_at: "2026-06-17T12:00:00Z".to_string(),
         ended_at: Some("2026-06-17T12:05:00Z".to_string()),
         duration_ms: Some(300_000),
+        final_outcome: Some("completed".to_string()),
+        abort_reason: None,
+        exit_status_code: Some(0),
         invocation_mode: "exec".to_string(),
         session_source: "exec".to_string(),
         model: model.map(str::to_string),
@@ -156,6 +201,8 @@ fn sample_summary(
         },
         turn_counts: TurnCounts::default(),
         tool_summary: Default::default(),
+        runtime_summary: Default::default(),
+        task_types: vec!["regular".to_string()],
         approval_summary: Default::default(),
         error_summary: Default::default(),
         changed_files_summary: ChangedFilesSummary::default(),
