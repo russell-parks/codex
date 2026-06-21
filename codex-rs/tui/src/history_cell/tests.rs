@@ -683,6 +683,8 @@ fn final_message_separator_preserves_runtime_metrics_for_short_turns() {
             count: 4,
             duration_ms: 1_200,
         },
+        bytes_written: 0,
+        bytes_read: 0,
         responses_api_overhead_ms: 650,
         responses_api_inference_time_ms: 1_940,
         responses_api_engine_iapi_ttft_ms: 410,

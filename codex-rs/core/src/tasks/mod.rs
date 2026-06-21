@@ -311,6 +311,7 @@ impl Session {
             .set_root_turn_id(turn_context.sub_id.clone());
         let task: Arc<dyn AnySessionTask> = Arc::new(task);
         let task_kind = task.kind();
+        crate::local_telemetry::record_task_type(&self.services.session_extension_data, task_kind);
         let span_name = task.span_name();
         let started_at = Instant::now();
         let turn_started_at_unix_ms = turn_context
@@ -824,11 +825,15 @@ impl Session {
             .turn_timing_state
             .complete_profile_and_duration_ms()
             .await;
+        let time_to_first_token_ms = turn_context
+            .turn_timing_state
+            .time_to_first_token_ms()
+            .await;
         self.services
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: turn_context.sub_id.clone(),
-                profile,
+                profile: profile.clone(),
             });
         let idle_cause = if matches!(
             abort_reason.as_ref(),
@@ -840,6 +845,11 @@ impl Session {
         } else {
             ThreadIdleCause::Completed
         };
+        crate::local_telemetry::record_turn_profile(
+            &self.services.session_extension_data,
+            &turn_context.sub_id,
+            &profile,
+        );
         let event = if let Some(reason) = abort_reason {
             if reason == TurnAbortReason::Interrupted {
                 run_turn_interrupt_hooks(self, &turn_context, &turn_state).await;
@@ -856,10 +866,6 @@ impl Session {
                 duration_ms,
             })
         } else {
-            let time_to_first_token_ms = turn_context
-                .turn_timing_state
-                .time_to_first_token_ms()
-                .await;
             let error = turn_context.terminal_error.lock().await.clone();
             self.emit_turn_stop_lifecycle(turn_context.extension_data.as_ref())
                 .await;
@@ -1027,8 +1033,13 @@ impl Session {
             .analytics_events_client
             .track_turn_profile(TurnProfileFact {
                 turn_id: task.turn_context.sub_id.clone(),
-                profile,
+                profile: profile.clone(),
             });
+        crate::local_telemetry::record_turn_profile(
+            &self.services.session_extension_data,
+            &task.turn_context.sub_id,
+            &profile,
+        );
         self.emit_turn_abort_lifecycle(reason.clone(), task.turn_context.extension_data.as_ref())
             .await;
         let event = EventMsg::TurnAborted(TurnAbortedEvent {
