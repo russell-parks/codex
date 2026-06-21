@@ -36,7 +36,14 @@ Raw events are append-only JSONL records:
 ```
 
 Session summaries are compact derived views that power `codex telemetry`
-queries without re-reading every raw event file.
+queries without re-reading every raw event file. They include run-end fields
+such as `final_outcome`, `abort_reason`, and `exit_status_code` when Codex can
+determine them safely, plus observed session task types and runtime usage
+details such as API request counts, retries, and byte totals when available.
+
+Daily rollups aggregate sessions, turns, token usage, tool calls, approvals,
+failures, and duration overall plus per-group buckets for model, reasoning
+effort, repo, invocation mode, and task type.
 
 ## Config
 
@@ -76,6 +83,10 @@ Privacy defaults are conservative:
 - Prompt hashes can still be recorded with `hash_prompts = true`.
 - Assistant text, tool output, diffs, file contents, and command output are not
   persisted by default.
+- When `log_assistant_text`, `log_tool_output`, or `log_diffs` are enabled,
+  raw events record opt-in visible turn-item payloads such as assistant
+  messages, file-change items, and MCP tool results rather than arbitrary raw
+  shell or command output.
 
 ## CLI
 

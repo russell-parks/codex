@@ -23,25 +23,44 @@ use codex_local_telemetry::ConfigSourceSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::JsonlTelemetryWriter;
 use codex_local_telemetry::LocalTelemetryWriter;
+use codex_local_telemetry::RuntimeSummary;
+use codex_local_telemetry_extension::SessionStopUpdate;
 use codex_local_telemetry_extension::SessionTelemetryBootstrap;
 use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::SessionSource;
 use tokio::process::Command;
 use tokio::time::timeout;
 
 use crate::ThreadConfigSnapshot;
 use crate::config::Config;
 use crate::session::session::Session;
+use crate::state::TaskKind;
+use codex_analytics::TurnProfile;
+use codex_protocol::protocol::RateLimitSnapshot;
 
-pub(crate) async fn initialize_session_extension_data(
-    config: &Config,
-    thread_config: &ThreadConfigSnapshot,
-    initial_history: &InitialHistory,
-    developer_instructions_loaded: bool,
-    loaded_agents_md: Option<&LoadedAgentsMd>,
-    thread_id: &str,
-    rollout_path: Option<&Path>,
-    session_store: &ExtensionData,
-) {
+pub(crate) struct SessionTelemetryInit<'a> {
+    pub(crate) config: &'a Config,
+    pub(crate) thread_config: &'a ThreadConfigSnapshot,
+    pub(crate) initial_history: &'a InitialHistory,
+    pub(crate) developer_instructions_loaded: bool,
+    pub(crate) loaded_agents_md: Option<&'a LoadedAgentsMd>,
+    pub(crate) thread_id: &'a str,
+    pub(crate) rollout_path: Option<&'a Path>,
+    pub(crate) session_store: &'a ExtensionData,
+}
+
+pub(crate) async fn initialize_session_extension_data(init: SessionTelemetryInit<'_>) {
+    let SessionTelemetryInit {
+        config,
+        thread_config,
+        initial_history,
+        developer_instructions_loaded,
+        loaded_agents_md,
+        thread_id,
+        rollout_path,
+        session_store,
+    } = init;
+
     if !config.telemetry.local.enabled {
         return;
     }
@@ -65,7 +84,7 @@ pub(crate) async fn initialize_session_extension_data(
             build_config_snapshot(config, developer_instructions_loaded, loaded_agents_md)
         });
     let bootstrap = SessionTelemetryBootstrap {
-        invocation_mode: thread_config.session_source.to_string(),
+        invocation_mode: invocation_mode_for_session_source(&thread_config.session_source),
         cwd: thread_config.cwd().display().to_string(),
         rollout_path: rollout_path.map(path_to_string),
         repo_root,
@@ -87,6 +106,9 @@ pub(crate) async fn initialize_session_extension_data(
             .map(|value| value.id.clone()),
         config_snapshot,
         log_user_prompt: config.telemetry.local.log_user_prompt,
+        log_assistant_text: config.telemetry.local.log_assistant_text,
+        log_tool_output: config.telemetry.local.log_tool_output,
+        log_diffs: config.telemetry.local.log_diffs,
         hash_prompts: config.telemetry.local.hash_prompts,
         write_run_summary: config.telemetry.local.write_run_summary,
         capture_session: config.telemetry.local.capture_session,
@@ -102,6 +124,19 @@ pub(crate) async fn initialize_session_extension_data(
         raw_event_path,
         bootstrap,
     );
+}
+
+fn invocation_mode_for_session_source(session_source: &SessionSource) -> String {
+    match session_source {
+        SessionSource::Cli => String::from("interactive"),
+        SessionSource::Exec => String::from("exec"),
+        SessionSource::Mcp => String::from("mcp-server"),
+        SessionSource::VSCode => String::from("vscode"),
+        SessionSource::Custom(source) => source.clone(),
+        SessionSource::Internal(source) => format!("internal_{source}"),
+        SessionSource::SubAgent(source) => format!("subagent_{source}"),
+        SessionSource::Unknown => String::from("unknown"),
+    }
 }
 
 fn build_config_snapshot(
@@ -157,7 +192,11 @@ fn config_source_kind(source: &ConfigLayerSource) -> &'static str {
     }
 }
 
-pub(crate) async fn update_session_stop_metadata(session: &Session) {
+pub(crate) async fn update_session_stop_metadata(
+    session: &Session,
+    final_outcome: Option<String>,
+    abort_reason: Option<String>,
+) {
     let cwd = session.cwd().await;
     let rollout_path = match session.current_rollout_path().await {
         Ok(path) => path.map(path_to_string),
@@ -168,16 +207,42 @@ pub(crate) async fn update_session_stop_metadata(session: &Session) {
     };
     let git = collect_git_stop_summary(cwd.as_path()).await;
     let changed_files_summary = collect_changed_files_summary(cwd.as_path()).await;
+    let runtime_summary = runtime_summary_patch(&session.services.session_telemetry);
     codex_local_telemetry_extension::update_session_stop_metadata_with_details(
         &session.services.session_extension_data,
-        rollout_path,
-        git,
-        changed_files_summary,
+        SessionStopUpdate {
+            rollout_path,
+            git,
+            changed_files_summary,
+            runtime_summary,
+            final_outcome,
+            abort_reason,
+        },
     );
 }
 
 pub(crate) fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {
     codex_local_telemetry_extension::record_user_prompt(session_store, turn_id, prompt_text);
+}
+
+pub(crate) fn record_turn_profile(
+    session_store: &ExtensionData,
+    turn_id: &str,
+    profile: &TurnProfile,
+) {
+    codex_local_telemetry_extension::record_turn_profile(session_store, turn_id, profile);
+}
+
+pub(crate) fn record_rate_limits(
+    session_store: &ExtensionData,
+    turn_id: &str,
+    rate_limits: &RateLimitSnapshot,
+) {
+    codex_local_telemetry_extension::record_rate_limits(session_store, turn_id, rate_limits);
+}
+
+pub(crate) fn record_task_type(session_store: &ExtensionData, task_kind: TaskKind) {
+    codex_local_telemetry_extension::record_task_type(session_store, task_kind_name(task_kind));
 }
 
 pub(crate) fn record_approval_requested(
@@ -230,6 +295,32 @@ fn resolve_telemetry_root(config: &Config) -> PathBuf {
 
 fn path_to_string(path: impl AsRef<Path>) -> String {
     path.as_ref().display().to_string()
+}
+
+fn task_kind_name(task_kind: TaskKind) -> &'static str {
+    match task_kind {
+        TaskKind::Regular => "regular",
+        TaskKind::Review => "review",
+        TaskKind::Compact => "compact",
+    }
+}
+
+fn runtime_summary_patch(
+    session_telemetry: &codex_otel::SessionTelemetry,
+) -> Option<RuntimeSummary> {
+    let runtime_metrics = session_telemetry.runtime_metrics_summary()?;
+    if runtime_metrics.websocket_calls.count > 0 || runtime_metrics.websocket_events.count > 0 {
+        return None;
+    }
+    if runtime_metrics.bytes_read == 0 && runtime_metrics.bytes_written == 0 {
+        return None;
+    }
+
+    Some(RuntimeSummary {
+        bytes_read: Some(runtime_metrics.bytes_read),
+        bytes_written: Some(runtime_metrics.bytes_written),
+        ..RuntimeSummary::default()
+    })
 }
 
 async fn collect_git_summary(cwd: &Path) -> (Option<String>, Option<GitSummary>) {
@@ -338,6 +429,10 @@ async fn collect_numstat_summary(repo_root: &Path) -> (Option<u64>, Option<u64>)
 
     (Some(insertions), Some(deletions))
 }
+
+#[cfg(test)]
+#[path = "local_telemetry_tests.rs"]
+mod tests;
 
 fn parse_status_paths(output: &str) -> Vec<String> {
     output

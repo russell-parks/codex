@@ -7,15 +7,25 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use clap::ValueEnum;
-use codex_config::types::OtelExporterKind;
+use codex_config::types::OtelConfig;
 use codex_core::config::Config;
 use codex_core::config::ConfigBuilder;
 use codex_core::config::LoaderOverrides;
 use codex_local_telemetry::DailyRollup;
+use codex_local_telemetry::LocalTelemetryDoctorReport;
 use codex_local_telemetry::LocalTelemetryStore;
 use codex_local_telemetry::SessionSummary;
 use codex_utils_cli::CliConfigOverrides;
 use serde::Serialize;
+
+#[path = "telemetry_cmd_report.rs"]
+mod report;
+
+use report::ReportView;
+pub(crate) use report::build_report_insights;
+pub(crate) use report::build_report_rows;
+pub(crate) use report::build_report_rows_from_rollups;
+use report::render_report_view;
 
 #[derive(Debug, clap::Parser)]
 pub struct TelemetryCli {
@@ -171,6 +181,20 @@ struct PrivacyView {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct DoctorView {
+    enabled: bool,
+    directory_exists: bool,
+    summaries: u64,
+    event_files: u64,
+    rollups: u64,
+    missing_event_files: u64,
+    orphaned_event_files: u64,
+    latest_event_timestamp: Option<String>,
+    disk_usage_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SessionRow {
     session_id: String,
     started_at: String,
@@ -180,19 +204,6 @@ struct SessionRow {
     total_tokens: u64,
     tool_calls: u64,
     duration_ms: Option<u64>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ReportRow {
-    key: String,
-    sessions: u64,
-    total_tokens: u64,
-    cached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_tokens: u64,
-    tool_calls: u64,
-    duration_ms: u64,
 }
 
 impl TelemetryCli {
@@ -323,7 +334,24 @@ fn run_show(loaded: &LoadedTelemetry, args: ShowArgs) -> Result<()> {
                 "cached_input_tokens: {}",
                 summary.usage_totals.cached_input_tokens
             );
+            println!(
+                "model_context_window: {}",
+                summary
+                    .usage_totals
+                    .model_context_window
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            );
+            println!(
+                "api_request_count: {}",
+                summary.runtime_summary.api_request_count
+            );
+            println!("retry_count: {}", summary.runtime_summary.retry_count);
             println!("tool_calls: {}", summary.tool_summary.total_calls);
+            println!(
+                "shell_commands: {}",
+                summary.tool_summary.shell_command_count
+            );
             println!("raw_event_path: {}", summary.raw_event_path);
             println!(
                 "rollout_path: {}",
@@ -336,22 +364,27 @@ fn run_show(loaded: &LoadedTelemetry, args: ShowArgs) -> Result<()> {
 }
 
 fn run_report(loaded: &LoadedTelemetry, args: ReportArgs) -> Result<()> {
+    let summaries = filter_summaries(
+        loaded.store.list_summaries()?,
+        args.since.as_deref(),
+        None,
+        None,
+    )?;
     let rows = if matches!(args.group_by, GroupBy::Day) {
         let rollups = filter_rollups(loaded.store.list_rollups()?, args.since.as_deref())?;
         build_report_rows_from_rollups(&rollups)
     } else {
-        let summaries = filter_summaries(
-            loaded.store.list_summaries()?,
-            args.since.as_deref(),
-            None,
-            None,
-        )?;
         build_report_rows(&summaries, args.group_by)
+    };
+    let view = ReportView {
+        group_by: format!("{:?}", args.group_by).to_ascii_lowercase(),
+        rows,
+        insights: build_report_insights(&summaries),
     };
 
     match args.format {
-        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&rows)?),
-        OutputFormat::Table => render_report_rows(&rows),
+        OutputFormat::Json => println!("{}", serde_json::to_string_pretty(&view)?),
+        OutputFormat::Table => render_report_view(&view),
     }
 
     Ok(())
@@ -394,25 +427,41 @@ fn run_prune(loaded: &LoadedTelemetry, args: PruneArgs) -> Result<()> {
 }
 
 fn run_doctor(loaded: &LoadedTelemetry, args: DoctorArgs) -> Result<()> {
-    let summaries = loaded.store.list_summaries()?;
-    let view = serde_json::json!({
-        "enabled": loaded.config.telemetry.local.enabled,
-        "directory_exists": loaded.store.root().exists(),
-        "summaries": summaries.len(),
-        "latest_event_timestamp": loaded.store.latest_event_timestamp()?,
-        "disk_usage_bytes": loaded.store.disk_usage_bytes()?,
-    });
+    let LocalTelemetryDoctorReport {
+        directory_exists,
+        summaries,
+        event_files,
+        rollups,
+        missing_event_files,
+        orphaned_event_files,
+    } = loaded.store.doctor_report()?;
+    let view = DoctorView {
+        enabled: loaded.config.telemetry.local.enabled,
+        directory_exists,
+        summaries,
+        event_files,
+        rollups,
+        missing_event_files,
+        orphaned_event_files,
+        latest_event_timestamp: loaded.store.latest_event_timestamp()?,
+        disk_usage_bytes: loaded.store.disk_usage_bytes()?,
+    };
 
     match args.format {
         StatusFormat::Json => println!("{}", serde_json::to_string_pretty(&view)?),
         StatusFormat::Table => {
-            println!("directory_exists: {}", loaded.store.root().exists());
-            println!("summaries: {}", summaries.len());
+            println!("enabled: {}", view.enabled);
+            println!("directory_exists: {}", view.directory_exists);
+            println!("summaries: {}", view.summaries);
+            println!("event_files: {}", view.event_files);
+            println!("rollups: {}", view.rollups);
+            println!("missing_event_files: {}", view.missing_event_files);
+            println!("orphaned_event_files: {}", view.orphaned_event_files);
             println!(
                 "latest_event_timestamp: {}",
-                view["latest_event_timestamp"].as_str().unwrap_or("-")
+                view.latest_event_timestamp.as_deref().unwrap_or("-")
             );
-            println!("disk_usage_bytes: {}", view["disk_usage_bytes"]);
+            println!("disk_usage_bytes: {}", view.disk_usage_bytes);
         }
     }
 
@@ -437,24 +486,6 @@ fn render_session_rows(rows: &[SessionRow]) {
     }
 }
 
-fn render_report_rows(rows: &[ReportRow]) {
-    println!(
-        "{:<24} {:>8} {:>12} {:>12} {:>12} {:>12}",
-        "Group", "Sessions", "Tokens", "Cached", "Reasoning", "Tools"
-    );
-    for row in rows {
-        println!(
-            "{:<24} {:>8} {:>12} {:>12} {:>12} {:>12}",
-            truncate(&row.key, 24),
-            row.sessions,
-            row.total_tokens,
-            row.cached_input_tokens,
-            row.reasoning_tokens,
-            row.tool_calls,
-        );
-    }
-}
-
 fn filter_summaries(
     summaries: Vec<SessionSummary>,
     since: Option<&str>,
@@ -463,7 +494,7 @@ fn filter_summaries(
 ) -> Result<Vec<SessionSummary>> {
     let since = since.map(parse_duration).transpose()?;
     let cutoff = since.map(|duration| chrono::Utc::now() - duration);
-    let repo = repo.map(|value| value.to_path_buf());
+    let repo = repo.map(std::path::Path::to_path_buf);
 
     let mut filtered = Vec::new();
     for summary in summaries {
@@ -529,73 +560,6 @@ fn filter_rollups(rollups: Vec<DailyRollup>, since: Option<&str>) -> Result<Vec<
     Ok(filtered)
 }
 
-fn build_report_rows(summaries: &[SessionSummary], group_by: GroupBy) -> Vec<ReportRow> {
-    let mut by_key = std::collections::BTreeMap::<String, ReportRow>::new();
-    for summary in summaries {
-        let key = report_key(summary, group_by);
-        let row = by_key.entry(key.clone()).or_insert_with(|| ReportRow {
-            key,
-            sessions: 0,
-            total_tokens: 0,
-            cached_input_tokens: 0,
-            output_tokens: 0,
-            reasoning_tokens: 0,
-            tool_calls: 0,
-            duration_ms: 0,
-        });
-        row.sessions += 1;
-        row.total_tokens += summary.usage_totals.total_tokens;
-        row.cached_input_tokens += summary.usage_totals.cached_input_tokens;
-        row.output_tokens += summary.usage_totals.output_tokens;
-        row.reasoning_tokens += summary.usage_totals.reasoning_tokens;
-        row.tool_calls += summary.tool_summary.total_calls;
-        row.duration_ms += summary.duration_ms.unwrap_or(0);
-    }
-
-    by_key.into_values().collect()
-}
-
-fn build_report_rows_from_rollups(rollups: &[DailyRollup]) -> Vec<ReportRow> {
-    rollups
-        .iter()
-        .map(|rollup| ReportRow {
-            key: rollup.date.clone(),
-            sessions: rollup.totals.sessions,
-            total_tokens: rollup.totals.total_tokens,
-            cached_input_tokens: rollup.totals.cached_input_tokens,
-            output_tokens: rollup.totals.output_tokens,
-            reasoning_tokens: rollup.totals.reasoning_tokens,
-            tool_calls: rollup.totals.tool_calls,
-            duration_ms: rollup.totals.duration_ms,
-        })
-        .collect()
-}
-
-fn report_key(summary: &SessionSummary, group_by: GroupBy) -> String {
-    match group_by {
-        GroupBy::Model => summary
-            .model
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        GroupBy::Effort => summary
-            .reasoning_effort
-            .clone()
-            .unwrap_or_else(|| "unknown".to_string()),
-        GroupBy::Repo => summary
-            .repo_root
-            .clone()
-            .or_else(|| summary.cwd.clone())
-            .unwrap_or_else(|| "unknown".to_string()),
-        GroupBy::Mode => summary.invocation_mode.clone(),
-        GroupBy::Day => summary
-            .started_at
-            .split('T')
-            .next()
-            .unwrap_or("unknown")
-            .to_string(),
-    }
-}
-
 fn export_jsonl(summaries: &[SessionSummary]) -> Result<String> {
     let mut output = String::new();
     for summary in summaries {
@@ -633,9 +597,7 @@ fn csv_field(value: &str) -> String {
 }
 
 fn otel_configured(config: &Config) -> bool {
-    !matches!(config.otel.exporter, OtelExporterKind::None)
-        || !matches!(config.otel.trace_exporter, OtelExporterKind::None)
-        || !matches!(config.otel.metrics_exporter, OtelExporterKind::None)
+    config.otel != OtelConfig::default()
 }
 
 fn parse_duration(value: &str) -> Result<Duration> {

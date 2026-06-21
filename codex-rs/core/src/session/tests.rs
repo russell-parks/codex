@@ -7427,6 +7427,7 @@ async fn make_session_with_history_source_and_agent_control_and_rx(
 async fn make_session_with_config_and_extensions_and_rx(
     mutator: impl FnOnce(&mut Config),
     extensions: Arc<codex_extension_api::ExtensionRegistry<crate::config::Config>>,
+    session_source: SessionSource,
 ) -> anyhow::Result<(Arc<Session>, async_channel::Receiver<Event>)> {
     let codex_home = tempfile::tempdir().expect("create temp dir");
     let mut config = build_test_config(codex_home.path()).await;
@@ -7475,7 +7476,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         metrics_service_name: None,
         app_server_client_name: None,
         app_server_client_version: None,
-        session_source: SessionSource::Exec,
+        session_source: session_source.clone(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
@@ -7487,7 +7488,7 @@ async fn make_session_with_config_and_extensions_and_rx(
     let (agent_status_tx, _agent_status_rx) = watch::channel(AgentStatus::PendingInit);
     let plugins_manager = Arc::new(PluginsManager::new(config.codex_home.to_path_buf()));
     let mcp_manager = Arc::new(McpManager::new(Arc::clone(&plugins_manager)));
-    let skills_manager = Arc::new(SkillsManager::new(
+    let skills_manager = Arc::new(SkillsService::new(
         config.codex_home.clone(),
         /*bundled_skills_enabled*/ true,
     ));
@@ -7504,7 +7505,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         tx_event,
         agent_status_tx,
         InitialHistory::New,
-        SessionSource::Exec,
+        session_source,
         skills_manager,
         plugins_manager,
         mcp_manager,
@@ -7532,10 +7533,13 @@ async fn session_new_seeds_local_telemetry_bootstrap_when_enabled() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
     codex_local_telemetry_extension::install(&mut builder);
     let extensions = Arc::new(builder.build());
-    let (session, _rx_event) =
-        make_session_with_config_and_extensions_and_rx(|_config| {}, extensions)
-            .await
-            .expect("session should initialize");
+    let (session, _rx_event) = make_session_with_config_and_extensions_and_rx(
+        |_config| {},
+        Arc::clone(&extensions),
+        SessionSource::Exec,
+    )
+    .await
+    .expect("session should initialize");
     let expected = {
         let state = session.state.lock().await;
         let session_configuration = &state.session_configuration;
@@ -7559,6 +7563,27 @@ async fn session_new_seeds_local_telemetry_bootstrap_when_enabled() {
 }
 
 #[tokio::test]
+async fn session_new_seeds_interactive_local_telemetry_bootstrap_for_cli_sessions() {
+    let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
+    codex_local_telemetry_extension::install(&mut builder);
+    let extensions = Arc::new(builder.build());
+    let (session, _rx_event) = make_session_with_config_and_extensions_and_rx(
+        |_config| {},
+        extensions,
+        SessionSource::Cli,
+    )
+    .await
+    .expect("session should initialize");
+
+    let bootstrap = session
+        .services
+        .session_extension_data
+        .get::<codex_local_telemetry_extension::SessionTelemetryBootstrap>()
+        .expect("telemetry bootstrap should be present");
+    assert_eq!(bootstrap.invocation_mode, "interactive");
+}
+
+#[tokio::test]
 async fn session_new_skips_local_telemetry_bootstrap_when_disabled() {
     let mut builder = codex_extension_api::ExtensionRegistryBuilder::<crate::config::Config>::new();
     codex_local_telemetry_extension::install(&mut builder);
@@ -7568,6 +7593,7 @@ async fn session_new_skips_local_telemetry_bootstrap_when_disabled() {
             config.telemetry.local.enabled = false;
         },
         extensions,
+        SessionSource::Exec,
     )
     .await
     .expect("session should initialize");
