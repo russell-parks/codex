@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::Utc;
+use codex_analytics::TurnProfile;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -16,28 +17,52 @@ use codex_extension_api::ToolLifecycleFuture;
 use codex_extension_api::ToolStartInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
+use codex_extension_api::TurnItemContributor;
 use codex_extension_api::TurnLifecycleContributor;
 use codex_extension_api::TurnStartInput;
 use codex_extension_api::TurnStopInput;
-use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::ConfigSnapshotSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::NoopTelemetryWriter;
 use codex_local_telemetry::PromptMetadataSummary;
+use codex_local_telemetry::RateLimitSummary;
+use codex_local_telemetry::RateLimitWindowSummary;
+use codex_local_telemetry::RuntimeSummary;
 use codex_local_telemetry::SessionSummary;
 use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_local_telemetry::TelemetryEvent;
 use codex_local_telemetry::TelemetryEventType;
+use codex_local_telemetry::TokenUsageSummary;
 use codex_local_telemetry::maybe_hash_prompt;
 use codex_local_telemetry::maybe_store_prompt;
+use codex_protocol::protocol::RateLimitSnapshot;
 use serde_json::json;
 use tokio::sync::Mutex;
 
 use crate::state::LocalTelemetryRunState;
 use crate::state::LocalTelemetryWriterHandle;
 use crate::state::PromptCaptureState;
-use crate::state::SessionStopMetadata;
+use crate::state::SessionStopUpdate;
+use crate::state::ToolCallTiming;
+use crate::state::ToolCallTimingState;
+
+#[path = "extension_recording.rs"]
+mod recording;
+#[path = "turn_items.rs"]
+mod turn_items;
+
+use recording::append_event;
+use recording::increment_tool_classification;
+pub use recording::record_approval_requested;
+pub use recording::record_approval_resolved;
+pub use recording::record_rate_limits;
+pub use recording::record_task_type;
+pub use recording::record_turn_profile;
+pub use recording::record_user_prompt;
+use recording::take_prompt_metadata;
+use recording::tool_call_outcome_payload;
+use turn_items::record_turn_item;
 
 #[derive(Debug, Clone)]
 pub struct SessionTelemetryBootstrap {
@@ -55,6 +80,9 @@ pub struct SessionTelemetryBootstrap {
     pub active_profile: Option<String>,
     pub config_snapshot: Option<ConfigSnapshotSummary>,
     pub log_user_prompt: bool,
+    pub log_assistant_text: bool,
+    pub log_tool_output: bool,
+    pub log_diffs: bool,
     pub hash_prompts: bool,
     pub write_run_summary: bool,
     pub capture_session: bool,
@@ -95,6 +123,9 @@ where
                 started_at: started_at_rfc3339.clone(),
                 ended_at: None,
                 duration_ms: None,
+                final_outcome: None,
+                abort_reason: None,
+                exit_status_code: None,
                 invocation_mode: bootstrap
                     .as_ref()
                     .map(|value| value.invocation_mode.clone())
@@ -128,6 +159,8 @@ where
                 usage_totals: Default::default(),
                 turn_counts: Default::default(),
                 tool_summary: Default::default(),
+                runtime_summary: RuntimeSummary::default(),
+                task_types: Vec::new(),
                 approval_summary: Default::default(),
                 error_summary: Default::default(),
                 changed_files_summary: Default::default(),
@@ -171,9 +204,25 @@ where
                     .as_ref()
                     .map(|value| value.capture_errors)
                     .unwrap_or(true),
+                log_assistant_text: bootstrap
+                    .as_ref()
+                    .map(|value| value.log_assistant_text)
+                    .unwrap_or(false),
+                log_tool_output: bootstrap
+                    .as_ref()
+                    .map(|value| value.log_tool_output)
+                    .unwrap_or(false),
+                log_diffs: bootstrap
+                    .as_ref()
+                    .map(|value| value.log_diffs)
+                    .unwrap_or(false),
                 summary: Arc::new(Mutex::new(summary)),
             };
             input.thread_store.insert(run_state);
+            input.thread_store.insert(ToolCallTimingState::default());
+            if let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() {
+                input.session_store.insert(run_state.as_ref().clone());
+            }
 
             if let Some(run_state) = input.thread_store.get::<LocalTelemetryRunState>() {
                 if !run_state.capture_session {
@@ -220,6 +269,15 @@ where
                         "log_user_prompt": bootstrap
                             .as_ref()
                             .map(|value| value.log_user_prompt),
+                        "log_assistant_text": bootstrap
+                            .as_ref()
+                            .map(|value| value.log_assistant_text),
+                        "log_tool_output": bootstrap
+                            .as_ref()
+                            .map(|value| value.log_tool_output),
+                        "log_diffs": bootstrap
+                            .as_ref()
+                            .map(|value| value.log_diffs),
                         "hash_prompts": bootstrap
                             .as_ref()
                             .map(|value| value.hash_prompts),
@@ -243,9 +301,19 @@ where
             let duration_ms =
                 u64::try_from(run_state.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
 
-            if let Some(stop_metadata) = input.session_store.get::<SessionStopMetadata>() {
+            if let Some(stop_metadata) = input.session_store.get::<SessionStopUpdate>() {
                 let mut summary = run_state.summary.lock().await;
                 summary.rollout_path = stop_metadata.rollout_path.clone();
+                summary.final_outcome = stop_metadata.final_outcome.clone();
+                summary.abort_reason = stop_metadata.abort_reason.clone();
+                if let Some(runtime_summary) = &stop_metadata.runtime_summary {
+                    if runtime_summary.bytes_read.is_some() {
+                        summary.runtime_summary.bytes_read = runtime_summary.bytes_read;
+                    }
+                    if runtime_summary.bytes_written.is_some() {
+                        summary.runtime_summary.bytes_written = runtime_summary.bytes_written;
+                    }
+                }
                 if let Some(git) = &stop_metadata.git {
                     summary
                         .git
@@ -265,9 +333,13 @@ where
                 json!({
                     "ended_at": ended_at,
                     "duration_ms": duration_ms,
+                    "final_outcome": summary.final_outcome,
+                    "abort_reason": summary.abort_reason,
+                    "exit_status_code": summary.exit_status_code,
                     "usage_totals": summary.usage_totals,
                     "turn_counts": summary.turn_counts,
                     "tool_summary": summary.tool_summary,
+                    "runtime_summary": summary.runtime_summary,
                     "error_summary": summary.error_summary,
                     "rollout_path": summary.rollout_path,
                     "changed_files_summary": summary.changed_files_summary,
@@ -459,6 +531,23 @@ impl TokenUsageContributor for LocalTelemetryExtension {
                         .unwrap_or_default();
                 summary.usage_totals.total_tokens =
                     u64::try_from(token_usage.total_token_usage.total_tokens).unwrap_or_default();
+                summary.usage_totals.last_token_usage = Some(TokenUsageSummary {
+                    input_tokens: u64::try_from(token_usage.last_token_usage.input_tokens)
+                        .unwrap_or_default(),
+                    cached_input_tokens: u64::try_from(
+                        token_usage.last_token_usage.cached_input_tokens,
+                    )
+                    .unwrap_or_default(),
+                    output_tokens: u64::try_from(token_usage.last_token_usage.output_tokens)
+                        .unwrap_or_default(),
+                    reasoning_tokens: u64::try_from(
+                        token_usage.last_token_usage.reasoning_output_tokens,
+                    )
+                    .unwrap_or_default(),
+                    total_tokens: u64::try_from(token_usage.last_token_usage.total_tokens)
+                        .unwrap_or_default(),
+                });
+                summary.usage_totals.model_context_window = token_usage.model_context_window;
             }
 
             append_event(
@@ -489,6 +578,19 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
             {
                 let mut summary = run_state.summary.lock().await;
                 summary.tool_summary.total_calls += 1;
+                increment_tool_classification(
+                    &mut summary.tool_summary,
+                    input.tool_name.to_string().as_str(),
+                );
+            }
+
+            if let Some(state) = input.thread_store.get::<ToolCallTimingState>() {
+                state.insert(
+                    input.call_id.to_string(),
+                    ToolCallTiming {
+                        started_at: Instant::now(),
+                    },
+                );
             }
 
             append_event(
@@ -533,6 +635,17 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
                         summary.tool_summary.failure_count += 1;
                     }
                 }
+
+                if let Some(state) = input.thread_store.get::<ToolCallTimingState>()
+                    && let Some(timing) = state.remove(input.call_id)
+                {
+                    let duration_ms =
+                        u64::try_from(timing.started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+                    summary.tool_summary.total_duration_ms = summary
+                        .tool_summary
+                        .total_duration_ms
+                        .saturating_add(duration_ms);
+                }
             }
 
             append_event(
@@ -552,6 +665,27 @@ impl ToolLifecycleContributor for LocalTelemetryExtension {
     }
 }
 
+impl TurnItemContributor for LocalTelemetryExtension {
+    fn contribute<'a>(
+        &'a self,
+        thread_store: &'a ExtensionData,
+        turn_store: &'a ExtensionData,
+        item: &'a mut codex_protocol::items::TurnItem,
+    ) -> ExtensionFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
+                return Ok(());
+            };
+            if !run_state.capture_turns {
+                return Ok(());
+            }
+
+            record_turn_item(run_state.as_ref(), turn_store.level_id(), item).await;
+            Ok(())
+        })
+    }
+}
+
 pub fn install<C>(registry: &mut ExtensionRegistryBuilder<C>)
 where
     C: Send + Sync + 'static,
@@ -560,7 +694,8 @@ where
     registry.thread_lifecycle_contributor(extension.clone());
     registry.turn_lifecycle_contributor(extension.clone());
     registry.token_usage_contributor(extension.clone());
-    registry.tool_lifecycle_contributor(extension);
+    registry.tool_lifecycle_contributor(extension.clone());
+    registry.turn_item_contributor(extension);
 }
 
 pub fn initialize_session_data(
@@ -577,7 +712,17 @@ pub fn initialize_session_data(
 }
 
 pub fn update_session_stop_metadata(session_store: &ExtensionData, rollout_path: Option<String>) {
-    update_session_stop_metadata_with_details(session_store, rollout_path, None, None);
+    update_session_stop_metadata_with_details(
+        session_store,
+        SessionStopUpdate {
+            rollout_path,
+            git: None,
+            changed_files_summary: None,
+            runtime_summary: None,
+            final_outcome: None,
+            abort_reason: None,
+        },
+    );
 }
 
 pub fn update_session_stop_metadata_with_git(
@@ -585,168 +730,22 @@ pub fn update_session_stop_metadata_with_git(
     rollout_path: Option<String>,
     git: Option<GitSummary>,
 ) {
-    update_session_stop_metadata_with_details(session_store, rollout_path, git, None);
+    update_session_stop_metadata_with_details(
+        session_store,
+        SessionStopUpdate {
+            rollout_path,
+            git,
+            changed_files_summary: None,
+            runtime_summary: None,
+            final_outcome: None,
+            abort_reason: None,
+        },
+    );
 }
 
 pub fn update_session_stop_metadata_with_details(
     session_store: &ExtensionData,
-    rollout_path: Option<String>,
-    git: Option<GitSummary>,
-    changed_files_summary: Option<ChangedFilesSummary>,
+    update: SessionStopUpdate,
 ) {
-    session_store.insert(SessionStopMetadata {
-        rollout_path,
-        git,
-        changed_files_summary,
-    });
-}
-
-pub fn record_approval_requested(
-    thread_store: &ExtensionData,
-    turn_id: &str,
-    approval_id: &str,
-    approval_kind: &str,
-) {
-    let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
-        return;
-    };
-    if !run_state.capture_approvals {
-        return;
-    }
-
-    let run_state = run_state.clone();
-    let turn_id = turn_id.to_string();
-    let approval_id = approval_id.to_string();
-    let approval_kind = approval_kind.to_string();
-    tokio::spawn(async move {
-        {
-            let mut summary = run_state.summary.lock().await;
-            summary.approval_summary.total_requests += 1;
-        }
-        append_event(
-            run_state.as_ref(),
-            TelemetryEventType::ApprovalRecorded,
-            Some(turn_id.as_str()),
-            json!({
-                "turn_id": turn_id,
-                "approval_id": approval_id,
-                "approval_kind": approval_kind,
-                "phase": "requested",
-            }),
-        )
-        .await;
-    });
-}
-
-pub fn record_approval_resolved(
-    thread_store: &ExtensionData,
-    turn_id: &str,
-    approval_id: &str,
-    approval_kind: &str,
-    approved: bool,
-    decision: &str,
-) {
-    let Some(run_state) = thread_store.get::<LocalTelemetryRunState>() else {
-        return;
-    };
-    if !run_state.capture_approvals {
-        return;
-    }
-
-    let run_state = run_state.clone();
-    let turn_id = turn_id.to_string();
-    let approval_id = approval_id.to_string();
-    let approval_kind = approval_kind.to_string();
-    let decision = decision.to_string();
-    tokio::spawn(async move {
-        {
-            let mut summary = run_state.summary.lock().await;
-            if approved {
-                summary.approval_summary.approved_count += 1;
-            } else {
-                summary.approval_summary.denied_count += 1;
-            }
-        }
-        append_event(
-            run_state.as_ref(),
-            TelemetryEventType::ApprovalRecorded,
-            Some(turn_id.as_str()),
-            json!({
-                "turn_id": turn_id,
-                "approval_id": approval_id,
-                "approval_kind": approval_kind,
-                "phase": if approved { "approved" } else { "denied" },
-                "decision": decision,
-            }),
-        )
-        .await;
-    });
-}
-
-pub fn record_user_prompt(session_store: &ExtensionData, turn_id: &str, prompt_text: &str) {
-    let Some(bootstrap) = session_store.get::<SessionTelemetryBootstrap>() else {
-        return;
-    };
-    if !bootstrap.capture_turns {
-        return;
-    }
-    let prompt_capture_state = session_store.get_or_init(PromptCaptureState::default);
-    let metadata = PromptMetadataSummary {
-        prompt_byte_length: u64::try_from(prompt_text.len()).unwrap_or(u64::MAX),
-        prompt_token_estimate: None,
-        prompt_sha256: maybe_hash_prompt(bootstrap.hash_prompts, prompt_text),
-        prompt_text: maybe_store_prompt(bootstrap.log_user_prompt, prompt_text),
-    };
-    prompt_capture_state.insert(turn_id.to_string(), metadata);
-}
-
-async fn append_event(
-    run_state: &LocalTelemetryRunState,
-    event_type: TelemetryEventType,
-    turn_id: Option<&str>,
-    payload: serde_json::Value,
-) {
-    let event = TelemetryEvent {
-        schema_version: TELEMETRY_SCHEMA_VERSION,
-        timestamp: Utc::now().to_rfc3339(),
-        session_id: run_state.session_id.clone(),
-        turn_id: turn_id.map(str::to_owned),
-        event_type,
-        payload,
-    };
-
-    if let Err(err) = run_state.writer.append_event(&event).await {
-        tracing::warn!(
-            "local telemetry append failed for {}: {err}",
-            run_state.session_id
-        );
-    }
-}
-
-fn tool_call_outcome_payload(outcome: ToolCallOutcome) -> serde_json::Value {
-    match outcome {
-        ToolCallOutcome::Completed { success } => json!({
-            "kind": "completed",
-            "success": success,
-        }),
-        ToolCallOutcome::Blocked => json!({
-            "kind": "blocked",
-        }),
-        ToolCallOutcome::Failed { handler_executed } => json!({
-            "kind": "failed",
-            "handler_executed": handler_executed,
-        }),
-        ToolCallOutcome::Aborted => json!({
-            "kind": "aborted",
-        }),
-    }
-}
-
-fn take_prompt_metadata(
-    session_store: &ExtensionData,
-    turn_id: &str,
-) -> Option<PromptMetadataSummary> {
-    session_store
-        .get::<PromptCaptureState>()
-        .and_then(|state| state.remove(turn_id))
+    session_store.insert(update);
 }

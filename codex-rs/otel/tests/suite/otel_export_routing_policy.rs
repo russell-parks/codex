@@ -521,6 +521,8 @@ fn otel_export_routing_policy_routes_api_request_auth_observability() {
             Some(401),
             Some("http 401"),
             std::time::Duration::from_millis(42),
+            /*request_body_bytes*/ Some(128),
+            /*response_body_bytes*/ Some(64),
             /*auth_header_attached*/ true,
             Some("authorization"),
             /*retry_after_unauthorized*/ true,

@@ -45,6 +45,7 @@ use codex_core_api::RealtimeAudioConfig;
 use codex_core_api::RealtimeConfig;
 use codex_core_api::SessionPickerViewMode;
 use codex_core_api::SessionSource;
+use codex_core_api::TelemetryConfig;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -301,6 +302,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         analytics_enabled: Some(false),
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
+        telemetry: TelemetryConfig::default(),
         otel: OtelConfig::default(),
     };
     config

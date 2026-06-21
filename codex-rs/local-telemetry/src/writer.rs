@@ -7,7 +7,7 @@ use std::sync::Arc;
 use chrono::NaiveDate;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
-use tokio::sync::Mutex;
+use tokio::sync::Semaphore;
 
 use crate::paths::event_file_path;
 use crate::paths::rollup_file_path;
@@ -47,8 +47,8 @@ pub struct JsonlTelemetryWriter {
     raw_event_path: PathBuf,
     summary_path: PathBuf,
     write_daily_rollups: bool,
-    append_lock: Arc<Mutex<()>>,
-    summary_lock: Arc<Mutex<()>>,
+    append_lock: Arc<Semaphore>,
+    summary_lock: Arc<Semaphore>,
 }
 
 impl JsonlTelemetryWriter {
@@ -65,8 +65,8 @@ impl JsonlTelemetryWriter {
             raw_event_path,
             summary_path,
             write_daily_rollups,
-            append_lock: Arc::new(Mutex::new(())),
-            summary_lock: Arc::new(Mutex::new(())),
+            append_lock: Arc::new(Semaphore::new(1)),
+            summary_lock: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -86,7 +86,11 @@ impl JsonlTelemetryWriter {
 impl LocalTelemetryWriter for JsonlTelemetryWriter {
     fn append_event<'a>(&'a self, event: &'a TelemetryEvent) -> LocalTelemetryFuture<'a> {
         Box::pin(async move {
-            let _append_guard = self.append_lock.lock().await;
+            let _append_guard = self
+                .append_lock
+                .acquire()
+                .await
+                .map_err(std::io::Error::other)?;
             ensure_parent_dir(self.raw_event_path.as_path()).await?;
 
             let mut payload = serde_json::to_vec(event).map_err(std::io::Error::other)?;
@@ -104,7 +108,11 @@ impl LocalTelemetryWriter for JsonlTelemetryWriter {
 
     fn write_summary<'a>(&'a self, summary: &'a SessionSummary) -> LocalTelemetryFuture<'a> {
         Box::pin(async move {
-            let _summary_guard = self.summary_lock.lock().await;
+            let _summary_guard = self
+                .summary_lock
+                .acquire()
+                .await
+                .map_err(std::io::Error::other)?;
             ensure_parent_dir(self.summary_path.as_path()).await?;
 
             let mut payload = serde_json::to_vec_pretty(summary).map_err(std::io::Error::other)?;

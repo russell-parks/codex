@@ -7,6 +7,7 @@ use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::GitSummary;
 use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::PromptMetadataSummary;
+use codex_local_telemetry::RuntimeSummary;
 use codex_local_telemetry::SessionSummary;
 use tokio::sync::Mutex as AsyncMutex;
 
@@ -23,6 +24,9 @@ pub(crate) struct LocalTelemetryRunState {
     pub capture_tool_calls: bool,
     pub capture_approvals: bool,
     pub capture_errors: bool,
+    pub log_assistant_text: bool,
+    pub log_tool_output: bool,
+    pub log_diffs: bool,
     pub summary: Arc<AsyncMutex<SessionSummary>>,
 }
 
@@ -38,15 +42,21 @@ impl std::fmt::Debug for LocalTelemetryRunState {
             .field("capture_tool_calls", &self.capture_tool_calls)
             .field("capture_approvals", &self.capture_approvals)
             .field("capture_errors", &self.capture_errors)
+            .field("log_assistant_text", &self.log_assistant_text)
+            .field("log_tool_output", &self.log_tool_output)
+            .field("log_diffs", &self.log_diffs)
             .finish_non_exhaustive()
     }
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SessionStopMetadata {
+pub struct SessionStopUpdate {
     pub rollout_path: Option<String>,
     pub git: Option<GitSummary>,
     pub changed_files_summary: Option<ChangedFilesSummary>,
+    pub runtime_summary: Option<RuntimeSummary>,
+    pub final_outcome: Option<String>,
+    pub abort_reason: Option<String>,
 }
 
 #[derive(Clone)]
@@ -60,6 +70,32 @@ impl std::fmt::Debug for LocalTelemetryWriterHandle {
         f.debug_struct("LocalTelemetryWriterHandle")
             .field("raw_event_path", &self.raw_event_path)
             .finish_non_exhaustive()
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct ToolCallTimingState {
+    by_call_id: Mutex<HashMap<String, ToolCallTiming>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ToolCallTiming {
+    pub started_at: Instant,
+}
+
+impl ToolCallTimingState {
+    pub(crate) fn insert(&self, call_id: String, timing: ToolCallTiming) {
+        self.by_call_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(call_id, timing);
+    }
+
+    pub(crate) fn remove(&self, call_id: &str) -> Option<ToolCallTiming> {
+        self.by_call_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(call_id)
     }
 }
 

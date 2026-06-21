@@ -246,9 +246,11 @@ pub struct LocalTelemetryConfigToml {
     pub log_user_prompt: Option<bool>,
     /// Persist assistant response text in local telemetry artifacts.
     pub log_assistant_text: Option<bool>,
-    /// Persist tool output in local telemetry artifacts.
+    /// Persist opt-in visible tool-result turn items in local telemetry
+    /// artifacts.
     pub log_tool_output: Option<bool>,
-    /// Persist diffs in local telemetry artifacts.
+    /// Persist visible file-change turn items and diff metadata in local
+    /// telemetry artifacts.
     pub log_diffs: Option<bool>,
     /// Record a SHA-256 hash for user prompts without storing full prompt text.
     pub hash_prompts: Option<bool>,
@@ -274,7 +276,7 @@ pub struct LocalTelemetryConfigToml {
     pub write_daily_rollups: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TelemetryConfig {
     pub local: LocalTelemetryConfig,
 }
@@ -299,6 +301,31 @@ pub struct LocalTelemetryConfig {
     pub capture_errors: bool,
     pub write_run_summary: bool,
     pub write_daily_rollups: bool,
+}
+
+impl Default for LocalTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            directory: "~/.codex/telemetry".to_string(),
+            retention_days: 90,
+            log_user_prompt: false,
+            log_assistant_text: false,
+            log_tool_output: false,
+            log_diffs: false,
+            hash_prompts: true,
+            capture_session: true,
+            capture_turns: true,
+            capture_usage: true,
+            capture_tool_calls: true,
+            capture_approvals: true,
+            capture_git: true,
+            capture_config_snapshot: true,
+            capture_errors: true,
+            write_run_summary: true,
+            write_daily_rollups: true,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]

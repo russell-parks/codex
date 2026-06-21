@@ -14,6 +14,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EncodedJsonBody {
     bytes: Bytes,
+    json: Option<Value>,
     trace_bytes: Option<Bytes>,
     prepared: bool,
 }
@@ -23,6 +24,16 @@ impl EncodedJsonBody {
     pub fn encode<T: Serialize + ?Sized>(value: &T) -> Result<Self, serde_json::Error> {
         serde_json::to_vec(value).map(|bytes| Self {
             bytes: Bytes::from(bytes),
+            json: None,
+            trace_bytes: None,
+            prepared: false,
+        })
+    }
+
+    fn from_json_value(value: Value) -> Result<Self, serde_json::Error> {
+        serde_json::to_vec(&value).map(|bytes| Self {
+            bytes: Bytes::from(bytes),
+            json: Some(value),
             trace_bytes: None,
             prepared: false,
         })
@@ -56,7 +67,8 @@ impl RequestBody {
     pub fn json(&self) -> Option<&Value> {
         match self {
             Self::Json(value) => Some(value),
-            Self::EncodedJson(_) | Self::Raw(_) => None,
+            Self::EncodedJson(body) => body.json.as_ref(),
+            Self::Raw(_) => None,
         }
     }
 }
@@ -116,6 +128,11 @@ impl Request {
     /// not repeat JSON serialization or compression. Request-signing auth also
     /// sees the same final headers and bytes that the transport will send.
     pub fn into_prepared(mut self) -> Result<Self, String> {
+        let json_body = match self.body.as_ref() {
+            Some(RequestBody::Json(body)) => Some(body.clone()),
+            Some(RequestBody::EncodedJson(body)) => body.json.clone(),
+            Some(RequestBody::Raw(_)) | None => None,
+        };
         let is_json = matches!(
             self.body,
             Some(RequestBody::Json(_) | RequestBody::EncodedJson(_))
@@ -138,6 +155,7 @@ impl Request {
         self.body = match (is_json, prepared.body) {
             (true, Some(bytes)) => Some(RequestBody::EncodedJson(EncodedJsonBody {
                 bytes,
+                json: json_body,
                 trace_bytes,
                 prepared: true,
             })),
@@ -166,7 +184,8 @@ impl Request {
                 })
             }
             Some(RequestBody::Json(body)) => {
-                let body = EncodedJsonBody::encode(body).map_err(|err| err.to_string())?;
+                let body = EncodedJsonBody::from_json_value(body.clone())
+                    .map_err(|err| err.to_string())?;
                 self.prepare_encoded_json(headers, &body)
             }
             Some(RequestBody::EncodedJson(body)) => self.prepare_encoded_json(headers, body),
@@ -318,6 +337,19 @@ mod tests {
             request.headers.get(http::header::CONTENT_TYPE),
             Some(&HeaderValue::from_static("application/json"))
         );
+    }
+
+    #[test]
+    fn into_prepared_preserves_json_view_for_prepared_requests() {
+        let request = Request::new(Method::POST, "https://example.com/v1/responses".to_string())
+            .with_json(&json!({"model": "test-model"}))
+            .into_prepared()
+            .expect("body should prepare");
+
+        let Some(body) = request.body.as_ref() else {
+            panic!("expected request body");
+        };
+        assert_eq!(body.json(), Some(&json!({"model": "test-model"})));
     }
 }
 

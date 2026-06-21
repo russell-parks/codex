@@ -1048,14 +1048,18 @@ impl Session {
                 &mcp_connection_manager,
             )));
             local_telemetry::initialize_session_extension_data(
-                config.as_ref(),
-                &session_configuration.thread_config_snapshot(),
-                &initial_history,
-                session_configuration.developer_instructions.is_some(),
-                session_configuration.loaded_agents_md.as_ref(),
-                thread_extension_data.level_id(),
-                rollout_path.as_deref(),
-                &session_extension_data,
+                local_telemetry::SessionTelemetryInit {
+                    config: config.as_ref(),
+                    thread_config: &session_configuration.thread_config_snapshot(),
+                    initial_history: &initial_history,
+                    developer_instructions_loaded: session_configuration
+                        .developer_instructions
+                        .is_some(),
+                    loaded_agents_md: session_configuration.loaded_agents_md.as_ref(),
+                    thread_id: thread_extension_data.level_id(),
+                    rollout_path: rollout_path.as_deref(),
+                    session_store: &session_extension_data,
+                },
             )
             .await;
             for contributor in extensions.thread_lifecycle_contributors() {

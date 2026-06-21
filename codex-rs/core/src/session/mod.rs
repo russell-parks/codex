@@ -3835,6 +3835,13 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
+        if let Some(rate_limits) = rate_limits.as_ref() {
+            crate::local_telemetry::record_rate_limits(
+                &self.services.session_extension_data,
+                &turn_context.sub_id,
+                rate_limits,
+            );
+        }
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }

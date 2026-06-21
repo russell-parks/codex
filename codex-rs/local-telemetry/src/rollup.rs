@@ -15,6 +15,8 @@ pub struct DailyRollup {
     pub by_effort: BTreeMap<String, RollupBucket>,
     pub by_repo: BTreeMap<String, RollupBucket>,
     pub by_mode: BTreeMap<String, RollupBucket>,
+    #[serde(default)]
+    pub by_task_type: BTreeMap<String, RollupBucket>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -27,6 +29,8 @@ pub struct RollupBucket {
     pub reasoning_tokens: u64,
     pub total_tokens: u64,
     pub tool_calls: u64,
+    #[serde(default)]
+    pub shell_commands: u64,
     pub approvals: u64,
     pub failures: u64,
     pub duration_ms: u64,
@@ -42,6 +46,7 @@ impl DailyRollup {
             by_effort: BTreeMap::new(),
             by_repo: BTreeMap::new(),
             by_mode: BTreeMap::new(),
+            by_task_type: BTreeMap::new(),
         }
     }
 
@@ -68,6 +73,9 @@ impl DailyRollup {
         )
         .add_summary(summary);
         bucket_for_key(&mut self.by_mode, summary.invocation_mode.as_str()).add_summary(summary);
+        for task_type in &summary.task_types {
+            bucket_for_key(&mut self.by_task_type, task_type).add_summary(summary);
+        }
     }
 }
 
@@ -81,6 +89,7 @@ impl RollupBucket {
         self.reasoning_tokens += summary.usage_totals.reasoning_tokens;
         self.total_tokens += summary.usage_totals.total_tokens;
         self.tool_calls += summary.tool_summary.total_calls;
+        self.shell_commands += summary.tool_summary.shell_command_count;
         self.approvals += summary.approval_summary.total_requests;
         self.failures += summary.turn_counts.aborted + summary.turn_counts.errored;
         self.duration_ms += summary.duration_ms.unwrap_or(0);

@@ -615,8 +615,17 @@ async fn shutdown_session_runtime(sess: &Arc<Session>) {
     sess.guardian_review_session.shutdown().await;
 }
 
-async fn emit_thread_stop_lifecycle(sess: &Session) {
-    crate::local_telemetry::update_session_stop_metadata(sess).await;
+async fn emit_thread_stop_lifecycle(sess: &Session, interrupted_active_turn: bool) {
+    crate::local_telemetry::update_session_stop_metadata(
+        sess,
+        Some(if interrupted_active_turn {
+            "interrupted".to_string()
+        } else {
+            "completed".to_string()
+        }),
+        interrupted_active_turn.then(|| "interrupted".to_string()),
+    )
+    .await;
     for contributor in sess.services.extensions.thread_lifecycle_contributors() {
         contributor
             .on_thread_stop(codex_extension_api::ThreadStopInput {
@@ -628,6 +637,13 @@ async fn emit_thread_stop_lifecycle(sess: &Session) {
 }
 
 pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
+    let interrupted_active_turn = {
+        let active_turn = sess.active_turn.lock().await;
+        active_turn
+            .as_ref()
+            .and_then(|turn| turn.task.as_ref())
+            .is_some()
+    };
     shutdown_session_runtime(sess).await;
     info!("Shutting down Codex instance");
     let history = sess.clone_history().await;
@@ -642,7 +658,7 @@ pub async fn shutdown(sess: &Arc<Session>, sub_id: String) -> bool {
         &[],
     );
 
-    emit_thread_stop_lifecycle(sess.as_ref()).await;
+    emit_thread_stop_lifecycle(sess.as_ref(), interrupted_active_turn).await;
 
     // Gracefully flush and shutdown thread persistence on session end so tests
     // that inspect durable state do not race with the background writer.
@@ -859,8 +875,15 @@ pub(super) async fn submission_loop(
     // If the submission loop exits because the channel closed without an
     // explicit shutdown op, still run session teardown.
     if !shutdown_received {
+        let interrupted_active_turn = {
+            let active_turn = sess.active_turn.lock().await;
+            active_turn
+                .as_ref()
+                .and_then(|turn| turn.task.as_ref())
+                .is_some()
+        };
         shutdown_session_runtime(&sess).await;
-        emit_thread_stop_lifecycle(sess.as_ref()).await;
+        emit_thread_stop_lifecycle(sess.as_ref(), interrupted_active_turn).await;
         if let Some(live_thread) = sess.live_thread()
             && let Err(err) = live_thread.shutdown().await
         {
