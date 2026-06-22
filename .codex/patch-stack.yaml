@@ -79,3 +79,12 @@ features:
       so downstream packaging can keep upstream command branding.
     status: active
     order: 70
+
+  - id: local-telemetry
+    branch: feat/local-telemetry
+    description: >
+      Adds local Codex CLI telemetry capture, reporting, and
+      privacy-aware usage accounting on top of the downstream
+      fork maintenance stack.
+    status: active
+    order: 80
