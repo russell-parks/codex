@@ -162,7 +162,7 @@ fn build_config_snapshot(
         .collect();
     let user_instruction_source = loaded_agents_md
         .and_then(LoadedAgentsMd::user_instructions)
-        .map(|instructions| instructions.source.inferred_native_path_string());
+        .map(|instructions| instructions.source.display().to_string());
     let project_instruction_sources = loaded_agents_md
         .into_iter()
         .flat_map(LoadedAgentsMd::sources)
