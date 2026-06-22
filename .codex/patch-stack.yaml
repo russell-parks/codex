@@ -17,68 +17,46 @@ features:
     status: active
     order: 0
 
-  - id: tui-composer-copy
-    branch: fork-maintenance/tui-composer-copy
+  - id: codext-reapply-carry-over
+    branch: chore/codext-reapply-carry-over
     description: >
-      Adds the Codext TUI composer clipboard shortcut so
-      Ctrl+Shift+C copies the current draft without changing
-      the existing Ctrl+C interrupt behavior.
+      Preserves the intentional downstream carry-over files
+      for the Codext fork, including repo-level release,
+      README, changelog, and skill material.
     status: active
     order: 10
 
-  - id: tui-status-header
-    branch: fork-maintenance/tui-status-header
+  - id: auth-reload-and-tui-recovery
+    branch: feat/auth-reload-and-tui-recovery
     description: >
-      Adds the Codext TUI status header with model, cwd, git,
-      rate-limit, and account segments plus background polling
-      for git state and usage-limit snapshots.
+      Preserves the downstream auth reload, status header,
+      usage-limit recovery, and related TUI and app-server
+      behavior from the reapply branch.
     status: active
     order: 20
+    depends_on:
+      - codext-reapply-carry-over
 
-  - id: tui-auth-json-watcher
-    branch: fork-maintenance/tui-auth-json-watcher
+  - id: revert-codext-resume-naming
+    branch: fix/revert-codext-resume-naming
     description: >
-      Adds the Codext auth.json watcher in the TUI, including
-      debounced reloads, deferred refresh while work is active,
-      and account-change transcript warnings.
+      Reverts Codext-specific resume command branding back to
+      codex naming so downstream packaging keeps upstream
+      command names.
     status: active
     order: 30
+    depends_on:
+      - auth-reload-and-tui-recovery
 
-  - id: tui-usage-limit-queue
-    branch: fork-maintenance/tui-usage-limit-queue
+  - id: disable-persistent-sqlite-log-db
+    branch: fix/disable-persistent-sqlite-log-db
     description: >
-      Adds the Codext queued-message and recovery-turn behavior
-      for usage-limit exhaustion so queued follow-ups pause and
-      resume cleanly when quota becomes available again.
+      Temporarily disables the persistent SQLite log DB sink
+      until upstream resolves the TRACE-level WAL write issue.
     status: active
     order: 40
-
-  - id: app-server-auth-switching
-    branch: fork-maintenance/app-server-auth-switching
-    description: >
-      Adds the Codext app-server auth reload behavior before
-      thread and turn entry points so account switches are picked
-      up at the next safe request boundary.
-    status: active
-    order: 50
-
-  - id: tui-resume-command-branding
-    branch: fork-maintenance/tui-resume-command-branding
-    description: >
-      Replaces user-facing resume hints with the Codext fork
-      command naming so resume guidance uses codext instead of
-      codex.
-    status: active
-    order: 60
-
-  - id: revert-codext-naming
-    branch: fork-maintenance/revert-codext-naming
-    description: >
-      Reverts Codext-specific user-facing command naming back
-      to codex naming on top of the imported fork feature stack,
-      so downstream packaging can keep upstream command branding.
-    status: active
-    order: 70
+    depends_on:
+      - revert-codext-resume-naming
 
   - id: local-telemetry
     branch: feat/local-telemetry
@@ -87,4 +65,6 @@ features:
       privacy-aware usage accounting on top of the downstream
       fork maintenance stack.
     status: active
-    order: 80
+    order: 50
+    depends_on:
+      - disable-persistent-sqlite-log-db
