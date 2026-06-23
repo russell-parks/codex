@@ -7379,6 +7379,7 @@ async fn make_session_with_config_and_extensions_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
+        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
         loaded_agents_md: None,
@@ -7436,6 +7437,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         mcp_manager,
         extensions,
         codex_extension_api::ExtensionDataInit::default(),
+        /*supports_openai_form_elicitation*/ false,
         AgentControl::default(),
         environment_manager,
         /*inherited_environments*/ None,
@@ -7446,6 +7448,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         )),
         codex_rollout_trace::ThreadTraceContext::disabled(),
         /*attestation_provider*/ None,
+        /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
     )
     .await?;
