@@ -17,6 +17,15 @@ features:
     status: active
     order: 0
 
+  - id: integration-artifact
+    branch: ci/integration-artifact
+    description: >
+      Builds a downloadable macOS arm64 Codex package artifact
+      from integration/latest so local use does not require a
+      large Cargo build tree.
+    status: active
+    order: 10
+
   - id: auth-reload-and-tui-recovery
     branch: feat/auth-reload-and-tui-recovery
     description: >
@@ -24,7 +33,7 @@ features:
       usage-limit recovery, and related TUI and app-server behavior
       that has not been adopted upstream.
     status: active
-    order: 10
+    order: 20
 
   - id: revert-codext-resume-naming
     branch: fix/revert-codext-resume-naming
@@ -33,7 +42,7 @@ features:
       codex naming so downstream packaging keeps upstream
       command names.
     status: active
-    order: 20
+    order: 30
     depends_on:
       - auth-reload-and-tui-recovery
 
@@ -43,7 +52,7 @@ features:
       Temporarily disables the persistent SQLite log DB sink
       until upstream resolves the TRACE-level WAL write issue.
     status: active
-    order: 30
+    order: 40
     depends_on:
       - revert-codext-resume-naming
 
@@ -54,6 +63,6 @@ features:
       privacy-aware usage accounting on top of the downstream
       fork maintenance stack.
     status: active
-    order: 40
+    order: 50
     depends_on:
       - disable-persistent-sqlite-log-db
