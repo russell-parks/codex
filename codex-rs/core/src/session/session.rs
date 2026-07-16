@@ -1687,6 +1687,7 @@ impl Session {
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
             let workspace_routing = thread_extension_data
                 .get_or_init(|| config.workspace_routing_context());
+            let loaded_agents_md = agents_md_manager.get_loaded().await;
             local_telemetry::initialize_session_extension_data(
                 local_telemetry::SessionTelemetryInit {
                     config: config.as_ref(),
@@ -1695,7 +1696,7 @@ impl Session {
                     developer_instructions_loaded: session_configuration
                         .developer_instructions
                         .is_some(),
-                    loaded_agents_md: session_configuration.loaded_agents_md.as_ref(),
+                    loaded_agents_md: loaded_agents_md.as_deref(),
                     thread_id: thread_extension_data.level_id(),
                     rollout_path: rollout_path.as_deref(),
                     session_store: &session_extension_data,
