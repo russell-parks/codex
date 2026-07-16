@@ -113,6 +113,7 @@ impl App {
 
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
+        let hard_stop_generation = self.rate_limit_hard_stop_generation;
         self.rate_limit_poll_task = Some(tokio::spawn(async move {
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(/*secs*/ 15)).await;
@@ -121,6 +122,7 @@ impl App {
                     .map_err(|err| err.to_string());
                 app_event_tx.send(AppEvent::RateLimitsLoaded {
                     origin: RateLimitRefreshOrigin::BackgroundPoll,
+                    hard_stop_generation,
                     result,
                 });
             }
