@@ -141,7 +141,6 @@ impl ChatWidget {
         if let Some(user_message) = self.pending_usage_limit_resume_turn.take() {
             self.usage_limit_resume_waiting_for_auth_reload = false;
             self.reasoning_buffer.clear();
-            self.full_reasoning_buffer.clear();
             self.set_status_header(String::from("Working"));
             self.submit_user_message(user_message);
             self.refresh_pending_input_preview();
