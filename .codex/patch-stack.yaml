@@ -17,25 +17,14 @@ features:
     status: active
     order: 0
 
-  - id: codext-reapply-carry-over
-    branch: chore/codext-reapply-carry-over
-    description: >
-      Preserves the intentional downstream carry-over files
-      for the Codext fork, including repo-level release,
-      README, changelog, and skill material.
-    status: active
-    order: 10
-
   - id: auth-reload-and-tui-recovery
     branch: feat/auth-reload-and-tui-recovery
     description: >
-      Preserves the downstream auth reload, status header,
-      usage-limit recovery, and related TUI and app-server
-      behavior from the reapply branch.
+      Reapplies the current Loongphy auth reload, status header,
+      usage-limit recovery, and related TUI and app-server behavior
+      that has not been adopted upstream.
     status: active
-    order: 20
-    depends_on:
-      - codext-reapply-carry-over
+    order: 10
 
   - id: revert-codext-resume-naming
     branch: fix/revert-codext-resume-naming
@@ -44,7 +33,7 @@ features:
       codex naming so downstream packaging keeps upstream
       command names.
     status: active
-    order: 30
+    order: 20
     depends_on:
       - auth-reload-and-tui-recovery
 
@@ -54,7 +43,7 @@ features:
       Temporarily disables the persistent SQLite log DB sink
       until upstream resolves the TRACE-level WAL write issue.
     status: active
-    order: 40
+    order: 30
     depends_on:
       - revert-codext-resume-naming
 
@@ -65,6 +54,6 @@ features:
       privacy-aware usage accounting on top of the downstream
       fork maintenance stack.
     status: active
-    order: 50
+    order: 40
     depends_on:
       - disable-persistent-sqlite-log-db
