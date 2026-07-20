@@ -216,8 +216,7 @@ impl CodexThread {
     }
 
     pub(crate) fn invalidate_model_transport_cache(&self) {
-        self.codex
-            .session
+        self.session
             .services
             .model_client
             .invalidate_cached_transport_state();
