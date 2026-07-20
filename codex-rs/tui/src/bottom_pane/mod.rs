@@ -1801,7 +1801,7 @@ impl BottomPane {
             composer_right_reserve,
             composer_header,
         )
-            .cursor_pos(area)
+        .cursor_pos(area)
     }
 
     pub(crate) fn cursor_style_with_composer_right_reserve_and_header(
@@ -1814,7 +1814,7 @@ impl BottomPane {
             composer_right_reserve,
             composer_header,
         )
-            .cursor_style(area)
+        .cursor_style(area)
     }
 
     pub(crate) fn set_status_line(&mut self, status_line: Option<Line<'static>>) {

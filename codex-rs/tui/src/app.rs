@@ -17,11 +17,11 @@ use crate::app_event::RateLimitRefreshOrigin;
 #[cfg(target_os = "windows")]
 use crate::app_event::WindowsSandboxEnableMode;
 use crate::app_event_sender::AppEventSender;
-use crate::app_server_session::account_state_from_get_account_response;
 use crate::app_server_session::AppServerBootstrap;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::AppServerStartedThread;
 use crate::app_server_session::TurnPermissionsOverride;
+use crate::app_server_session::account_state_from_get_account_response;
 use crate::app_server_session::app_server_rate_limit_snapshots;
 use crate::auth_watch::AuthWatch;
 use crate::bottom_pane::AppLinkViewParams;
@@ -540,7 +540,11 @@ impl AuthIdentity {
             Some(StatusAccountDisplay::ChatGpt { email, .. }) => email.clone(),
             Some(StatusAccountDisplay::ApiKey) | None => None,
         };
-        Self { email, plan_type, has_chatgpt_account }
+        Self {
+            email,
+            plan_type,
+            has_chatgpt_account,
+        }
     }
 
     fn display_label(&self) -> String {
@@ -557,7 +561,11 @@ impl AuthIdentity {
 }
 
 fn auth_change_message(previous: &AuthIdentity, next: &AuthIdentity) -> String {
-    format!("Account changed from {} to {}.", previous.display_label(), next.display_label())
+    format!(
+        "Account changed from {} to {}.",
+        previous.display_label(),
+        next.display_label()
+    )
 }
 
 pub(crate) struct App {
@@ -826,17 +834,21 @@ impl App {
                 );
                 if changed {
                     self.chat_widget.handle_auth_identity_changed();
-                    self.chat_widget.add_to_history(history_cell::new_warning_event(
-                        auth_change_message(&previous, &next),
-                    ));
+                    self.chat_widget
+                        .add_to_history(history_cell::new_warning_event(auth_change_message(
+                            &previous, &next,
+                        )));
                 }
                 self.chat_widget.on_auth_reload_completed(changed);
                 if has_chatgpt_account {
                     self.start_rate_limit_polling(app_server);
-                    let reset_hint_request_id = self.chat_widget.start_rate_limit_reset_startup_check();
+                    let reset_hint_request_id =
+                        self.chat_widget.start_rate_limit_reset_startup_check();
                     self.refresh_rate_limits(
                         app_server,
-                        RateLimitRefreshOrigin::StartupPrefetch { reset_hint_request_id },
+                        RateLimitRefreshOrigin::StartupPrefetch {
+                            reset_hint_request_id,
+                        },
                     );
                 } else {
                     self.stop_rate_limit_polling();
@@ -848,10 +860,12 @@ impl App {
             }
             Err(err) => {
                 tracing::warn!(%err, "failed to reload auth from storage");
-                self.chat_widget.on_auth_reload_completed(/*identity_changed*/ false);
-                self.chat_widget.add_to_history(history_cell::new_warning_event(
-                    "Failed to reload auth after auth.json changed.".to_string(),
-                ));
+                self.chat_widget
+                    .on_auth_reload_completed(/*identity_changed*/ false);
+                self.chat_widget
+                    .add_to_history(history_cell::new_warning_event(
+                        "Failed to reload auth after auth.json changed.".to_string(),
+                    ));
             }
         }
     }
@@ -915,7 +929,10 @@ impl App {
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
-        let auth_watch = Some(AuthWatch::start(config.codex_home.as_path(), app_event_tx.clone()));
+        let auth_watch = Some(AuthWatch::start(
+            config.codex_home.as_path(),
+            app_event_tx.clone(),
+        ));
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
