@@ -99,7 +99,11 @@ impl StatusHeader {
         let rate_limit = snapshot.and_then(|snapshot| {
             snapshot.primary.as_ref().map(|primary| {
                 let remaining = (100.0 - primary.used_percent).clamp(0.0, 100.0).round() as i64;
-                match primary.resets_at.as_deref().and_then(|reset| reset.split_once(' ')) {
+                match primary
+                    .resets_at
+                    .as_deref()
+                    .and_then(|reset| reset.split_once(' '))
+                {
                     Some((time, _)) => format!("{remaining}% {time}"),
                     None => format!("{remaining}%"),
                 }
@@ -138,20 +142,34 @@ impl StatusHeader {
             push(vec!["\u{ee9c} ".cyan(), Span::from(model.clone()).cyan()]);
         }
         if !self.directory.is_empty() {
-            let available = width.saturating_sub(UnicodeWidthStr::width("\u{f07c} ")).max(8);
-            let directory = crate::text_formatting::center_truncate_path(&self.directory, available);
+            let available = width
+                .saturating_sub(UnicodeWidthStr::width("\u{f07c} "))
+                .max(8);
+            let directory =
+                crate::text_formatting::center_truncate_path(&self.directory, available);
             push(vec!["\u{f07c} ".yellow(), Span::from(directory).yellow()]);
         }
         if let Some(git) = &self.git {
             let mut segment = vec!["\u{f418} ".blue(), Span::from(git.branch.clone()).blue()];
-            if git.ahead > 0 { segment.push(format!(" ↑{}", git.ahead).green()); }
-            if git.behind > 0 { segment.push(format!(" ↓{}", git.behind).red()); }
-            if git.changed > 0 { segment.push(format!(" +{}", git.changed).yellow()); }
-            if git.untracked > 0 { segment.push(format!(" ?{}", git.untracked).red()); }
+            if git.ahead > 0 {
+                segment.push(format!(" ↑{}", git.ahead).green());
+            }
+            if git.behind > 0 {
+                segment.push(format!(" ↓{}", git.behind).red());
+            }
+            if git.changed > 0 {
+                segment.push(format!(" +{}", git.changed).yellow());
+            }
+            if git.untracked > 0 {
+                segment.push(format!(" ?{}", git.untracked).red());
+            }
             push(segment);
         }
         if let Some(rate_limit) = &self.rate_limit {
-            push(vec!["\u{f464} ".cyan(), Span::from(rate_limit.clone()).cyan()]);
+            push(vec![
+                "\u{f464} ".cyan(),
+                Span::from(rate_limit.clone()).cyan(),
+            ]);
         }
         if let Some(account) = &self.account {
             push(vec![Span::from(account.clone()).cyan()]);
