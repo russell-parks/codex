@@ -299,8 +299,10 @@ impl ChatWidget {
 
             let has_exhausted_quota = Self::rate_limit_snapshot_has_exhausted_quota(&snapshot);
             let has_available_quota = Self::rate_limit_snapshot_has_available_quota(&snapshot);
-            let should_resume_paused_queue =
-                is_codex_limit && !has_exhausted_quota && has_available_quota;
+            let should_resume_paused_queue = is_codex_limit
+                && !workspace_limit_reached
+                && !has_exhausted_quota
+                && has_available_quota;
             let should_pause_queue = is_codex_limit && has_exhausted_quota;
 
             let mut display =
