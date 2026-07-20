@@ -47,6 +47,7 @@ use codex_app_server_protocol::ReviewDelivery;
 use codex_app_server_protocol::ReviewStartParams;
 use codex_app_server_protocol::ReviewStartResponse;
 use codex_app_server_protocol::ReviewTarget;
+use codex_app_server_protocol::SessionSource;
 use codex_app_server_protocol::SkillsListParams;
 use codex_app_server_protocol::SkillsListResponse;
 use codex_app_server_protocol::Thread;
@@ -119,6 +120,7 @@ use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ModelUpgrade;
 use codex_protocol::openai_models::ReasoningEffortPreset;
+use codex_protocol::protocol::SubAgentSource;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_path_uri::PathUri;
 use color_eyre::eyre::ContextCompat;
@@ -141,6 +143,12 @@ const THREAD_SETTINGS_UPDATE_METHOD: &str = "thread/settings/update";
 pub(crate) enum ForkGoalContinuation {
     StartIfIdle,
     DeferUntilNextTurn,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ForkPresentation {
+    Regular,
+    SideConversation,
 }
 
 fn bootstrap_request_error(context: &'static str, err: TypedRequestError) -> color_eyre::Report {
@@ -215,6 +223,24 @@ impl ThreadParamsMode {
 pub(crate) struct AppServerStartedThread {
     pub(crate) session: ThreadSessionState,
     pub(crate) turns: Vec<Turn>,
+    pub(crate) blocks_direct_input: bool,
+}
+
+pub(crate) fn source_agent_path(source: &SessionSource) -> Option<String> {
+    match source {
+        SessionSource::SubAgent(SubAgentSource::ThreadSpawn { agent_path, .. }) => {
+            agent_path.clone().map(String::from)
+        }
+        _ => None,
+    }
+}
+
+/// Uses the server capability when available and preserves compatibility with older servers.
+pub(crate) fn thread_blocks_direct_input(thread: &Thread) -> bool {
+    thread
+        .can_accept_direct_input
+        .map(|can_accept| !can_accept)
+        .unwrap_or_else(|| source_agent_path(&thread.source).is_some())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -433,7 +459,7 @@ impl AppServerSession {
                 request_id,
                 params: ExternalAgentConfigImportParams {
                     migration_items,
-                    source: Some(migration_source.clone()),
+                    source: Some("cli".to_string()),
                     migration_source: Some(migration_source),
                 },
             })
@@ -555,6 +581,42 @@ impl AppServerSession {
         before_turn_id: Option<String>,
         goal_continuation: ForkGoalContinuation,
     ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_presentation(
+            config,
+            thread_id,
+            last_turn_id,
+            before_turn_id,
+            goal_continuation,
+            ForkPresentation::Regular,
+        )
+        .await
+    }
+
+    pub(crate) async fn fork_side_thread(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+    ) -> Result<AppServerStartedThread> {
+        self.fork_thread_at_with_presentation(
+            config,
+            thread_id,
+            /*last_turn_id*/ None,
+            /*before_turn_id*/ None,
+            ForkGoalContinuation::StartIfIdle,
+            ForkPresentation::SideConversation,
+        )
+        .await
+    }
+
+    async fn fork_thread_at_with_presentation(
+        &mut self,
+        config: Config,
+        thread_id: ThreadId,
+        last_turn_id: Option<String>,
+        before_turn_id: Option<String>,
+        goal_continuation: ForkGoalContinuation,
+        presentation: ForkPresentation,
+    ) -> Result<AppServerStartedThread> {
         let request_id = self.next_request_id();
         let session_config = self.session_config_with_effective_service_tier(&config);
         let response: ThreadForkResponse = self
@@ -566,6 +628,7 @@ impl AppServerSession {
                     before_turn_id,
                     defer_goal_continuation: goal_continuation
                         == ForkGoalContinuation::DeferUntilNextTurn,
+                    exclude_turns: presentation == ForkPresentation::SideConversation,
                     ..thread_fork_params_from_config(
                         session_config,
                         thread_id,
@@ -578,9 +641,12 @@ impl AppServerSession {
             .map_err(|err| {
                 bootstrap_request_error("thread/fork failed during TUI bootstrap", err)
             })?;
-        let fork_parent_title = self
-            .fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
-            .await;
+        let fork_parent_title = if presentation == ForkPresentation::SideConversation {
+            None
+        } else {
+            self.fork_parent_title_from_app_server(response.thread.forked_from_id.as_deref())
+                .await
+        };
         let mut started =
             started_thread_from_fork_response(response, &config, self.thread_params_mode()).await?;
         started.session.fork_parent_title = fork_parent_title;
@@ -1568,6 +1634,7 @@ async fn started_thread_from_start_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<AppServerStartedThread> {
+    let blocks_direct_input = thread_blocks_direct_input(&response.thread);
     let session =
         thread_session_state_from_thread_start_response(&response, config, thread_params_mode)
             .await
@@ -1575,6 +1642,7 @@ async fn started_thread_from_start_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
+        blocks_direct_input,
     })
 }
 
@@ -1583,6 +1651,7 @@ async fn started_thread_from_resume_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<AppServerStartedThread> {
+    let blocks_direct_input = thread_blocks_direct_input(&response.thread);
     let session =
         thread_session_state_from_thread_resume_response(&response, config, thread_params_mode)
             .await
@@ -1590,6 +1659,7 @@ async fn started_thread_from_resume_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
+        blocks_direct_input,
     })
 }
 
@@ -1598,6 +1668,7 @@ async fn started_thread_from_fork_response(
     config: &Config,
     thread_params_mode: ThreadParamsMode,
 ) -> Result<AppServerStartedThread> {
+    let blocks_direct_input = thread_blocks_direct_input(&response.thread);
     let session =
         thread_session_state_from_thread_fork_response(&response, config, thread_params_mode)
             .await
@@ -1605,6 +1676,7 @@ async fn started_thread_from_fork_response(
     Ok(AppServerStartedThread {
         session,
         turns: response.thread.turns,
+        blocks_direct_input,
     })
 }
 
@@ -2107,6 +2179,32 @@ mod tests {
         assert_eq!(fork.thread_source, Some(ThreadSource::User));
     }
 
+    #[tokio::test]
+    async fn remote_resume_params_keep_local_roots_with_cross_platform_cwd_override() {
+        let temp_dir = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&temp_dir).await;
+        let expected_workspace_roots = config.workspace_roots.clone();
+        let remote_cwd = if cfg!(windows) {
+            std::path::PathBuf::from("/srv/remote/project")
+        } else {
+            std::path::PathBuf::from(r"C:\remote\project")
+        };
+
+        let resume = thread_resume_params_from_config(
+            config,
+            ThreadId::new(),
+            ThreadParamsMode::Remote,
+            Some(remote_cwd.as_path()),
+            ResumeModelSettings::RestoreFromThread,
+        );
+
+        assert_eq!(resume.cwd, Some(remote_cwd.to_string_lossy().to_string()));
+        assert_eq!(
+            resume.runtime_workspace_roots,
+            Some(expected_workspace_roots)
+        );
+    }
+
     #[test]
     fn sandbox_mode_does_not_project_non_cwd_write_roots_for_remote_sessions() {
         let cwd = test_path_buf("/workspace/project").abs();
@@ -2350,6 +2448,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn side_fork_skips_parent_title_lookup_but_normal_ephemeral_fork_keeps_it() -> Result<()>
+    {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let config = build_config(&codex_home).await;
+        let source_thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved user message",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create source rollout"),
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+        app_server
+            .resume_thread(
+                config.clone(),
+                source_thread_id,
+                ResumeModelSettings::RestoreFromThread,
+            )
+            .await?;
+        app_server
+            .thread_set_name(source_thread_id, "Source thread".to_string())
+            .await?;
+
+        let mut ephemeral_config = config;
+        ephemeral_config.ephemeral = true;
+        let normal_ephemeral_fork = app_server
+            .fork_thread(ephemeral_config.clone(), source_thread_id)
+            .await?;
+        let side_fork = app_server
+            .fork_side_thread(ephemeral_config, source_thread_id)
+            .await?;
+
+        assert_eq!(
+            normal_ephemeral_fork.session.fork_parent_title.as_deref(),
+            Some("Source thread")
+        );
+        assert_eq!(side_fork.session.fork_parent_title, None);
+        app_server.shutdown().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn config_request_overrides_preserve_implicit_personality_default() {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let mut config = build_config(&temp_dir).await;
@@ -2390,6 +2534,41 @@ mod tests {
             params.developer_instructions.as_deref(),
             Some("Developer override.")
         );
+    }
+
+    #[tokio::test]
+    async fn side_fork_excludes_turns_without_clearing_regular_ephemeral_fork() -> Result<()> {
+        let codex_home = tempfile::tempdir().expect("tempdir");
+        let mut config = build_config(&codex_home).await;
+        config.ephemeral = true;
+        let thread_id = ThreadId::from_string(
+            &create_fake_rollout(
+                codex_home.path(),
+                "2025-01-05T12-00-00",
+                "2025-01-05T12:00:00Z",
+                "Saved user message",
+                Some(config.model_provider_id.as_str()),
+                /*git_info*/ None,
+            )
+            .expect("create rollout"),
+        )?;
+        let mut app_server = crate::start_embedded_app_server_for_picker(&config).await?;
+
+        let regular = app_server.fork_thread(config.clone(), thread_id).await?;
+        let side = app_server.fork_side_thread(config, thread_id).await?;
+
+        assert_eq!(regular.turns.len(), 1);
+        assert!(matches!(
+            regular.turns[0].items.as_slice(),
+            [codex_app_server_protocol::ThreadItem::UserMessage { content, .. }]
+                if content == &[UserInput::Text {
+                    text: "Saved user message".to_string(),
+                    text_elements: Vec::new(),
+                }]
+        ));
+        assert_eq!(side.turns, Vec::<Turn>::new());
+        app_server.shutdown().await?;
+        Ok(())
     }
 
     #[tokio::test]
@@ -2493,6 +2672,7 @@ mod tests {
                 cwd: test_path_buf("/tmp/project").abs(),
                 cli_version: "0.0.0".to_string(),
                 source: codex_app_server_protocol::SessionSource::Cli,
+                can_accept_direct_input: None,
                 thread_source: None,
                 agent_nickname: None,
                 agent_role: None,
@@ -2568,6 +2748,7 @@ mod tests {
         assert_eq!(started.session.permission_profile, read_only_profile);
         assert_eq!(started.turns.len(), 1);
         assert_eq!(started.turns[0], response.thread.turns[0]);
+        assert!(!started.blocks_direct_input);
 
         let embedded_config = ConfigBuilder::default()
             .codex_home(temp_dir.path().join("embedded-codex-home"))

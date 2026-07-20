@@ -204,7 +204,13 @@ pub struct StartThreadOptions {
 
 fn originator_from_service_name(service_name: Option<&str>) -> Option<String> {
     let service_name = service_name?.trim();
-    for originator in ["codex_work_desktop", "codex_work_web", "codex_work_mobile"] {
+    for originator in [
+        "codex_work_desktop",
+        "codex_work_web",
+        "codex_work_mobile",
+        "codex_work_cca",
+        "chatgpt_cca",
+    ] {
         if service_name.eq_ignore_ascii_case(originator) {
             return Some(originator.to_string());
         }
@@ -1224,6 +1230,9 @@ impl ThreadManagerState {
         forked_from_thread_id: Option<ThreadId>,
         config: &Config,
     ) -> MultiAgentVersion {
+        if let Some(multi_agent_version) = config.multi_agent_version_override() {
+            return multi_agent_version;
+        }
         self.initial_multi_agent_version_for_spawn(
             initial_history,
             session_source,
