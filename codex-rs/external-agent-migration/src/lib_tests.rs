@@ -3,6 +3,10 @@ use super::hooks_cla::hook_migration_cla;
 use super::hooks_cla::rewrite_hook_command_cla;
 use super::*;
 use pretty_assertions::assert_eq;
+use std::fs;
+use std::path::Path;
+use std::path::PathBuf;
+use toml::Value as TomlValue;
 
 const TEST_REWRITE_PROFILE: RewriteProfile = RewriteProfile::new(
     "CLAUDE.md",
@@ -445,6 +449,13 @@ fn hook_migration_ignores_unsupported_handlers() {
                     "command": source_hook_command("approve.py")
                 }]
             }],
+            "SessionEnd": [{
+                "matcher": "clear",
+                "hooks": [{
+                    "type": "command",
+                    "command": source_hook_command("cleanup.py")
+                }]
+            }],
             "SubagentStart": [{
                 "matcher": "worker",
                 "hooks": [{"type": "prompt", "prompt": "check"}]
@@ -467,6 +478,13 @@ fn hook_migration_ignores_unsupported_handlers() {
                 "hooks": [{
                     "type": "command",
                     "command": migrated_hook_command("approve.py")
+                }]
+            }],
+            "SessionEnd": [{
+                "matcher": "clear",
+                "hooks": [{
+                    "type": "command",
+                    "command": migrated_hook_command("cleanup.py")
                 }]
             }]
         })
