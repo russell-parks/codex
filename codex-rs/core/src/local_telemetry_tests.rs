@@ -75,6 +75,7 @@ fn runtime_summary_patch_uses_http_byte_totals_without_websockets() {
         /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
+        /*agent_identity_telemetry*/ None,
     );
     telemetry.record_sse_bytes_read(1024);
 
@@ -129,11 +130,13 @@ fn runtime_summary_patch_skips_partial_websocket_byte_totals() {
         /*cf_ray*/ None,
         /*auth_error*/ None,
         /*auth_error_code*/ None,
+        /*agent_identity_telemetry*/ None,
     );
     telemetry.record_websocket_request(
         Duration::from_millis(75),
         /*error*/ None,
         /*connection_reused*/ false,
+        /*agent_identity_telemetry*/ None,
     );
 
     assert_eq!(runtime_summary_patch(&telemetry), None);

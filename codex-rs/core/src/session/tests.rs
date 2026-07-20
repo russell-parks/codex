@@ -5716,10 +5716,8 @@ async fn make_session_with_config_and_extensions_and_rx(
     let session_configuration = SessionConfiguration {
         provider: config.model_provider.clone(),
         collaboration_mode,
-        multi_agent_mode: Default::default(),
         model_reasoning_summary: config.model_reasoning_summary,
         developer_instructions: config.developer_instructions.clone(),
-        loaded_agents_md: None,
         service_tier: None,
         personality: config.personality,
         base_instructions: config
@@ -5732,7 +5730,6 @@ async fn make_session_with_config_and_extensions_and_rx(
         permission_profile_state: config.permissions.permission_profile_state().clone(),
         windows_sandbox_level: WindowsSandboxLevel::from_config(&config),
         environments: TurnEnvironmentSelections::new(config.cwd.clone(), default_environments),
-        workspace_roots: config.workspace_roots.clone(),
         codex_home: config.codex_home.clone(),
         thread_name: None,
         original_config_do_not_use: Arc::clone(&config),
@@ -5740,9 +5737,11 @@ async fn make_session_with_config_and_extensions_and_rx(
         app_server_client_name: None,
         app_server_client_version: None,
         session_source: session_source.clone(),
+        history_mode: Default::default(),
         forked_from_thread_id: None,
         parent_thread_id: None,
         thread_source: None,
+        originator: "test_originator".to_string(),
         dynamic_tools: Vec::new(),
         user_shell_override: None,
     };
@@ -5772,6 +5771,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         skills_manager,
         plugins_manager,
         mcp_manager,
+        Arc::new(codex_code_mode::InProcessCodeModeSessionProvider),
         extensions,
         codex_extension_api::ExtensionDataInit::default(),
         /*supports_openai_form_elicitation*/ false,
