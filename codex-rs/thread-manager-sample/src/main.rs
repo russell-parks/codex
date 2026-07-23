@@ -230,6 +230,7 @@ fn new_config(model: Option<String>, arg0_paths: Arg0DispatchPaths) -> anyhow::R
         tui_keymap: TuiKeymap::default(),
         tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_resume_cwd: None,
+        tui_usage_limit_resume_prompt: None,
         tui_vim_mode_default: false,
         cwd: cwd.clone(),
         workspace_roots: vec![cwd],
