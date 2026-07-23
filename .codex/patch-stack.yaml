@@ -1,0 +1,68 @@
+version: 1
+
+upstream:
+  remote: upstream
+  branch: main
+
+integration:
+  branch: integration/latest
+
+features:
+  - id: bootstrap
+    branch: fork-maintenance/bootstrap
+    description: >
+      Bootstraps fork maintenance metadata for this repository
+      with the patch stack definition used by the local
+      fork-maintenance workflow.
+    status: active
+    order: 0
+
+  - id: integration-artifact
+    branch: ci/integration-artifact
+    description: >
+      Builds a downloadable macOS arm64 Codex package artifact
+      from integration/latest so local use does not require a
+      large Cargo build tree.
+    status: active
+    order: 10
+
+  - id: auth-reload-and-tui-recovery
+    branch: feat/auth-reload-and-tui-recovery
+    description: >
+      Reapplies the current Loongphy auth reload, status header,
+      usage-limit recovery, and related TUI and app-server behavior
+      that has not been adopted upstream.
+    status: active
+    order: 20
+
+  - id: revert-codext-resume-naming
+    branch: fix/revert-codext-resume-naming
+    description: >
+      Reverts Codext-specific resume command branding back to
+      codex naming so downstream packaging keeps upstream
+      command names.
+    status: active
+    order: 30
+    depends_on:
+      - auth-reload-and-tui-recovery
+
+  - id: disable-persistent-sqlite-log-db
+    branch: fix/disable-persistent-sqlite-log-db
+    description: >
+      Temporarily disables the persistent SQLite log DB sink
+      until upstream resolves the TRACE-level WAL write issue.
+    status: active
+    order: 40
+    depends_on:
+      - revert-codext-resume-naming
+
+  - id: local-telemetry
+    branch: feat/local-telemetry
+    description: >
+      Adds local Codex CLI telemetry capture, reporting, and
+      privacy-aware usage accounting on top of the downstream
+      fork maintenance stack.
+    status: active
+    order: 50
+    depends_on:
+      - disable-persistent-sqlite-log-db

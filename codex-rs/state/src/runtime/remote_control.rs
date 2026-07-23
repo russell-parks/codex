@@ -157,7 +157,7 @@ mod tests {
     use super::StateRuntime;
     use super::test_support::unique_temp_dir;
     use crate::migrations::STATE_MIGRATOR;
-    use crate::state_db_path;
+    use codex_utils_absolute_path::test_support::PathExt;
     use pretty_assertions::assert_eq;
     use sqlx::migrate::Migrator;
     use std::borrow::Cow;
@@ -329,15 +329,23 @@ mod tests {
             .await
             .expect("create codex home");
         let old_state_migrator = Migrator {
-            migrations: Cow::Owned(STATE_MIGRATOR.migrations[..36].to_vec()),
+            migrations: Cow::Owned(
+                STATE_MIGRATOR
+                    .migrations
+                    .iter()
+                    .filter(|migration| migration.version <= 36)
+                    .cloned()
+                    .collect(),
+            ),
             ignore_missing: false,
             locking: true,
             no_tx: false,
             table_name: STATE_MIGRATOR.table_name.clone(),
             create_schemas: STATE_MIGRATOR.create_schemas.clone(),
         };
-        let pool = crate::SqliteConfig::new_for_testing(codex_home.clone())
-            .open_read_write_pool(&state_db_path(codex_home.as_path()))
+        let sqlite = crate::SqliteConfig::new_for_testing(codex_home.as_path().abs());
+        let pool = sqlite
+            .open_read_write_pool(&sqlite.state_db_path())
             .await
             .expect("open old state db");
         old_state_migrator

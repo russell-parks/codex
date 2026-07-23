@@ -1078,6 +1078,8 @@ impl TurnRequestProcessor {
                 codex_responses_as_items: params.codex_responses_as_items.unwrap_or(false),
                 codex_response_item_prefix: params.codex_response_item_prefix,
                 codex_response_handoff_mode: params.codex_response_handoff_mode.unwrap_or_default(),
+                codex_response_handoff_channel_prefixes: params
+                    .codex_response_handoff_channel_prefixes,
                 model: params.model,
                 output_modality: params.output_modality,
                 include_startup_context: params.include_startup_context.unwrap_or(true),
@@ -1332,7 +1334,7 @@ impl TurnRequestProcessor {
         if let Some(mut thread) = stored_thread {
             thread.session_id = review_thread.session_configured().session_id.to_string();
             self.thread_watch_manager
-                .upsert_thread_silently(thread.clone())
+                .upsert_thread_silently(&thread.id)
                 .await;
             thread.status = resolve_thread_status(
                 self.thread_watch_manager

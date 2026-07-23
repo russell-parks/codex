@@ -28,6 +28,7 @@ use codex_protocol::user_input::UserInput;
 use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::Mutex;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
@@ -43,8 +44,8 @@ use crate::mcp_tool_call::MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC;
 use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::mcp_tool_call::build_guardian_mcp_tool_review_request;
 use crate::mcp_tool_call::is_mcp_tool_approval_question_id;
-use crate::mcp_tool_call::lookup_mcp_tool_metadata;
 use crate::mcp_tool_call::mcp_approvals_reviewer;
+use crate::session::GitEnrichmentPolicy;
 use crate::session::SUBMISSION_CHANNEL_CAPACITY;
 use crate::session::SessionIo;
 use crate::session::SessionSpawnArgs;
@@ -81,6 +82,7 @@ pub(crate) async fn run_codex_thread_interactive(
     cancel_token: CancellationToken,
     subagent_source: SubAgentSource,
     initial_history: Option<InitialHistory>,
+    git_enrichment_policy: GitEnrichmentPolicy,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
     let (tx_ops, rx_ops) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -132,6 +134,7 @@ pub(crate) async fn run_codex_thread_interactive(
         attestation_provider: parent_session.services.attestation_provider.clone(),
         external_time_provider: Some(Arc::clone(&parent_session.services.time_provider)),
         inherited_multi_agent_version: Some(MultiAgentVersion::Disabled),
+        git_enrichment_policy,
     }))
     .or_cancel(&cancel_token)
     .await??;
@@ -216,6 +219,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         child_cancel.clone(),
         subagent_source,
         initial_history,
+        GitEnrichmentPolicy::Fresh,
     ))
     .await?;
 
@@ -367,24 +371,12 @@ async fn forward_events(
                         id,
                         msg: EventMsg::McpToolCallBegin(event),
                     } => {
-                        // Runtime refreshes are published before a request step is captured, so
-                        // the child runtime at call begin is the one executing this invocation.
-                        // Cache its metadata now; the later approval event has only a call ID.
-                        let metadata = if let Some(turn_context) =
-                            session.turn_context_for_sub_id(&id).await
-                        {
-                            let mcp = session.services.latest_mcp_runtime();
-                            lookup_mcp_tool_metadata(
-                                session.as_ref(),
-                                turn_context.as_ref(),
-                                mcp.manager(),
-                                &event.invocation.server,
-                                &event.invocation.tool,
-                            )
-                            .await
-                        } else {
-                            None
-                        };
+                        // The later approval event has only a call ID. Retain the exact facts
+                        // captured before this begin event instead of consulting the latest
+                        // runtime after a refresh.
+                        let metadata = session
+                            .mcp_tool_approval_metadata(&id, &event.call_id)
+                            .await;
                         pending_mcp_invocations
                             .lock()
                             .await
@@ -534,7 +526,7 @@ async fn handle_exec_approval(
             review_cancel.clone(),
         );
         await_approval_with_cancel(
-            async move { review_rx.await.unwrap_or_default() },
+            receive_approval_review(review_rx),
             parent_session,
             &approval_id_for_op,
             cancel_token,
@@ -643,7 +635,7 @@ async fn handle_patch_approval(
         );
         Some(
             await_approval_with_cancel(
-                async move { review_rx.await.unwrap_or_default() },
+                receive_approval_review(review_rx),
                 parent_session,
                 &approval_id,
                 cancel_token,
@@ -758,7 +750,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         review_cancel.clone(),
     );
     let decision = await_approval_with_cancel(
-        async move { review_rx.await.unwrap_or_default() },
+        receive_approval_review(review_rx),
         parent_session,
         &event.call_id,
         cancel_token,
@@ -779,7 +771,7 @@ async fn maybe_auto_review_mcp_request_user_input(
         ReviewDecision::Approved
         | ReviewDecision::ApprovedExecpolicyAmendment { .. }
         | ReviewDecision::NetworkPolicyAmendment { .. } => MCP_TOOL_APPROVAL_ACCEPT.to_string(),
-        ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort => {
+        ReviewDecision::Denied { .. } | ReviewDecision::TimedOut | ReviewDecision::Abort => {
             MCP_TOOL_APPROVAL_DECLINE_SYNTHETIC.to_string()
         }
     };
@@ -884,6 +876,12 @@ where
     }
 }
 
+async fn receive_approval_review(review_rx: oneshot::Receiver<ReviewDecision>) -> ReviewDecision {
+    review_rx
+        .await
+        .unwrap_or_else(|_| ReviewDecision::denied("automatic approval review could not complete"))
+}
+
 /// Await an approval decision, aborting on cancellation.
 async fn await_approval_with_cancel<F>(
     fut: F,
@@ -902,7 +900,10 @@ where
                 review_cancel_token.cancel();
             }
             parent_session
-                .notify_approval(approval_id, codex_protocol::protocol::ReviewDecision::Abort)
+                .notify_approval(
+                    approval_id,
+                    codex_protocol::protocol::ReviewDecision::Abort,
+                )
                 .await;
             codex_protocol::protocol::ReviewDecision::Abort
         }
