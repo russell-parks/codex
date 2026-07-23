@@ -2259,7 +2259,7 @@ impl AuthManager {
             self.chatgpt_base_url.as_deref(),
             self.keyring_backend_kind,
             self.agent_identity_authapi_base_url.as_deref(),
-            self.auth_route_config.as_ref(),
+            &self.auth_route_config,
         )
         .await
     }
