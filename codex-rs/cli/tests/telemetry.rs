@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::Duration as ChronoDuration;
+use chrono::Utc;
 use codex_local_telemetry::SessionSummary;
 use core_test_support::skip_if_no_network;
 use predicates::prelude::PredicateBooleanExt;
@@ -363,13 +365,15 @@ fn telemetry_show_and_report_surface_seeded_summaries() -> Result<()> {
     let home = TempDir::new()?;
     write_telemetry_config(home.path())?;
 
+    let model_a_started_at = telemetry_timestamp_days_ago(1, 12, 0);
+    let model_a_ended_at = telemetry_timestamp_days_ago(1, 12, 1);
     write_summary_json(
         home.path(),
         sample_summary_json(SampleSummaryInput {
             codex_home: home.path(),
             session_id: "session-model-a",
-            started_at: "2026-06-20T12:00:00Z",
-            ended_at: "2026-06-20T12:01:00Z",
+            started_at: &model_a_started_at,
+            ended_at: &model_a_ended_at,
             model: "gpt-5",
             effort: "medium",
             total_tokens: 100,
@@ -378,13 +382,15 @@ fn telemetry_show_and_report_surface_seeded_summaries() -> Result<()> {
             changed_files: &["src/main.rs"],
         }),
     )?;
+    let model_b_started_at = telemetry_timestamp_days_ago(1, 13, 0);
+    let model_b_ended_at = telemetry_timestamp_days_ago(1, 13, 1);
     write_summary_json(
         home.path(),
         sample_summary_json(SampleSummaryInput {
             codex_home: home.path(),
             session_id: "session-model-b",
-            started_at: "2026-06-20T13:00:00Z",
-            ended_at: "2026-06-20T13:01:00Z",
+            started_at: &model_b_started_at,
+            ended_at: &model_b_ended_at,
             model: "gpt-4.1",
             effort: "high",
             total_tokens: 40,
@@ -444,13 +450,15 @@ fn telemetry_export_and_prune_use_seeded_store() -> Result<()> {
     let home = TempDir::new()?;
     write_telemetry_config(home.path())?;
 
+    let old_started_at = telemetry_timestamp_days_ago(14, 12, 0);
+    let old_ended_at = telemetry_timestamp_days_ago(14, 12, 1);
     write_summary_json(
         home.path(),
         sample_summary_json(SampleSummaryInput {
             codex_home: home.path(),
             session_id: "session-old",
-            started_at: "2026-06-01T12:00:00Z",
-            ended_at: "2026-06-01T12:01:00Z",
+            started_at: &old_started_at,
+            ended_at: &old_ended_at,
             model: "gpt-5",
             effort: "medium",
             total_tokens: 10,
@@ -459,13 +467,15 @@ fn telemetry_export_and_prune_use_seeded_store() -> Result<()> {
             changed_files: &[],
         }),
     )?;
+    let new_started_at = telemetry_timestamp_days_ago(1, 12, 0);
+    let new_ended_at = telemetry_timestamp_days_ago(1, 12, 1);
     write_summary_json(
         home.path(),
         sample_summary_json(SampleSummaryInput {
             codex_home: home.path(),
             session_id: "session-new",
-            started_at: "2026-06-20T12:00:00Z",
-            ended_at: "2026-06-20T12:01:00Z",
+            started_at: &new_started_at,
+            ended_at: &new_ended_at,
             model: "gpt-5",
             effort: "medium",
             total_tokens: 25,
@@ -476,20 +486,24 @@ fn telemetry_export_and_prune_use_seeded_store() -> Result<()> {
     )?;
     write_event_jsonl(
         home.path(),
-        "2026/06/01",
+        &telemetry_date_path(&old_started_at),
         "session-old",
-        "2026-06-01T12:01:00Z",
+        &old_ended_at,
     )?;
     write_event_jsonl(
         home.path(),
-        "2026/06/20",
+        &telemetry_date_path(&new_started_at),
         "session-new",
-        "2026-06-20T12:01:00Z",
+        &new_ended_at,
     )?;
     std::fs::create_dir_all(home.path().join("telemetry/rollups"))?;
+    let old_rollup_date = telemetry_date(&old_started_at);
     std::fs::write(
-        home.path().join("telemetry/rollups/2026-06-01.json"),
-        r#"{"schema_version":1,"date":"2026-06-01","totals":{"sessions":1,"turns":1,"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_tokens":0,"total_tokens":2,"tool_calls":0,"approvals":0,"failures":0,"duration_ms":60000},"by_model":{},"by_effort":{},"by_repo":{},"by_mode":{}}"#,
+        home.path()
+            .join(format!("telemetry/rollups/{old_rollup_date}.json")),
+        format!(
+            r#"{{"schema_version":1,"date":"{old_rollup_date}","totals":{{"sessions":1,"turns":1,"input_tokens":1,"cached_input_tokens":0,"output_tokens":1,"reasoning_tokens":0,"total_tokens":2,"tool_calls":0,"approvals":0,"failures":0,"duration_ms":60000}},"by_model":{{}},"by_effort":{{}},"by_repo":{{}},"by_mode":{{}}}}"#
+        ),
     )?;
 
     let export_path = home.path().join("telemetry-export.csv");
@@ -722,11 +736,24 @@ fn sample_summary_json(input: SampleSummaryInput<'_>) -> serde_json::Value {
     })
 }
 
-fn raw_event_path_for(codex_home: &Path, started_at: &str, session_id: &str) -> PathBuf {
-    let date = started_at
+fn telemetry_timestamp_days_ago(days_ago: i64, hour: u32, minute: u32) -> String {
+    let date = (Utc::now() - ChronoDuration::days(days_ago)).date_naive();
+    format!("{date}T{hour:02}:{minute:02}:00Z")
+}
+
+fn telemetry_date(timestamp: &str) -> &str {
+    timestamp
         .split('T')
         .next()
-        .unwrap_or_else(|| panic!("started_at should include date"));
+        .unwrap_or_else(|| panic!("timestamp should include date"))
+}
+
+fn telemetry_date_path(timestamp: &str) -> String {
+    telemetry_date(timestamp).replace('-', "/")
+}
+
+fn raw_event_path_for(codex_home: &Path, started_at: &str, session_id: &str) -> PathBuf {
+    let date = telemetry_date(started_at);
     let mut parts = date.split('-');
     let year = parts
         .next()
