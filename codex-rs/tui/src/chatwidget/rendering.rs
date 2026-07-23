@@ -3,7 +3,7 @@
 use super::*;
 
 impl ChatWidget {
-    pub(super) fn as_renderable(&self) -> RenderableItem<'_> {
+    pub(crate) fn as_renderable(&self) -> RenderableItem<'_> {
         let active_cell_right_reserve = self.ambient_pet_wrap_reserved_cols();
         let active_cell_renderable = match &self.transcript.active_cell {
             Some(cell) => RenderableItem::Owned(Box::new(TranscriptAreaRenderable {
@@ -58,6 +58,10 @@ impl ChatWidget {
             )),
         );
         RenderableItem::Owned(Box::new(flex))
+    }
+
+    pub(crate) fn note_rendered_width(&self, width: u16) {
+        self.last_rendered_width.set(Some(width as usize));
     }
 }
 
@@ -154,7 +158,7 @@ impl TranscriptAreaRenderable<'_> {
 impl Renderable for ChatWidget {
     fn render(&self, area: Rect, buf: &mut Buffer) {
         self.as_renderable().render(area, buf);
-        self.last_rendered_width.set(Some(area.width as usize));
+        self.note_rendered_width(area.width);
     }
 
     fn desired_height(&self, width: u16) -> u16 {
