@@ -485,6 +485,7 @@ impl TurnRequestProcessor {
             &self.outgoing,
             &self.thread_watch_manager,
             &self.config.chatgpt_base_url,
+            self.config.http_client_factory(),
             "turn/start",
         )
         .await;
