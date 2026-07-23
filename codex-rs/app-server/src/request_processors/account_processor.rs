@@ -1014,6 +1014,7 @@ impl AccountRequestProcessor {
                 &self.config_manager,
                 &self.outgoing,
                 &self.config.chatgpt_base_url,
+                self.config.http_client_factory(),
                 "account/get",
             )
             .await

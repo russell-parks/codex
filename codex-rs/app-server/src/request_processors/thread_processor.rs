@@ -947,6 +947,7 @@ impl ThreadRequestProcessor {
             &self.outgoing,
             &self.thread_watch_manager,
             &self.config.chatgpt_base_url,
+            self.config.http_client_factory(),
             "thread/start",
         )
         .await;
@@ -3043,6 +3044,7 @@ impl ThreadRequestProcessor {
             &self.outgoing,
             &self.thread_watch_manager,
             &self.config.chatgpt_base_url,
+            self.config.http_client_factory(),
             "thread/resume",
         )
         .await;
