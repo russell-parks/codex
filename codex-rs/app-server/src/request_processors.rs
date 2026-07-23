@@ -526,6 +526,7 @@ async fn reload_auth_from_storage_if_idle(
     outgoing: &OutgoingMessageSender,
     thread_watch_manager: &ThreadWatchManager,
     chatgpt_base_url: &str,
+    http_client_factory: codex_http_client::HttpClientFactory,
     reason: &str,
 ) {
     if *thread_watch_manager.subscribe_running_turn_count().borrow() != 0 {
@@ -540,6 +541,7 @@ async fn reload_auth_from_storage_if_idle(
         config_manager,
         outgoing,
         chatgpt_base_url,
+        http_client_factory,
         reason,
     )
     .await
@@ -558,6 +560,7 @@ async fn handle_auth_reload_status(
     config_manager: &ConfigManager,
     outgoing: &OutgoingMessageSender,
     chatgpt_base_url: &str,
+    http_client_factory: codex_http_client::HttpClientFactory,
     reason: &str,
 ) -> AuthReloadStatus {
     match status {
@@ -571,6 +574,7 @@ async fn handle_auth_reload_status(
                 config_manager.replace_cloud_config_bundle_loader(
                     Arc::clone(auth_manager),
                     chatgpt_base_url.to_string(),
+                    http_client_factory,
                 );
                 config_manager
                     .sync_default_client_residency_requirement()
