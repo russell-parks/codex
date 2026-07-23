@@ -1,0 +1,110 @@
+name: integration-artifact
+
+on:
+  push:
+    branches:
+      - integration/latest
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build"
+        required: false
+        default: integration/latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-artifact-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build integration artifact - aarch64-apple-darwin
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      TARGET: aarch64-apple-darwin
+      ARTIFACT_NAME: codex-integration-aarch64-apple-darwin
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+
+      - name: Build Codex runtime
+        run: |
+          set -euo pipefail
+          cargo build \
+            --locked \
+            --release \
+            --target "$TARGET" \
+            --bin codex \
+            --bin codex-code-mode-host
+
+      - name: Stage package archive
+        run: |
+          set -euo pipefail
+          archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          mkdir -p "$archive_dir"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle primary \
+            --entrypoint-dir "${CARGO_TARGET_DIR}/${TARGET}/release" \
+            --archive-dir "$archive_dir"
+
+      - name: Resolve artifact metadata
+        id: artifact_metadata
+        run: |
+          set -euo pipefail
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          version="$("${CARGO_TARGET_DIR}/${TARGET}/release/codex" --version)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Write artifact metadata
+        run: |
+          set -euo pipefail
+          dist_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          dist_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "dist" / os.environ["TARGET"]
+          metadata = {
+              "artifact_name": os.environ["ARTIFACT_NAME"],
+              "archive": f"codex-package-{os.environ['TARGET']}.tar.gz",
+              "commit": os.environ["BUILD_COMMIT"],
+              "codex_version": os.environ["CODEX_VERSION"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "source_ref": os.environ["BUILD_REF"],
+              "target": os.environ["TARGET"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+          }
+          (dist_dir / "integration-artifact.json").write_text(
+              json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+        env:
+          BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          BUILD_COMMIT: ${{ steps.artifact_metadata.outputs.commit }}
+          CODEX_VERSION: ${{ steps.artifact_metadata.outputs.version }}
+
+      - name: Upload integration artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.gz
+            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.zst
+            dist/${{ env.TARGET }}/integration-artifact.json
+          if-no-files-found: error
