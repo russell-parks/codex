@@ -5895,6 +5895,7 @@ async fn make_session_with_config_and_extensions_and_rx(
         /*attestation_provider*/ None,
         /*external_time_provider*/ None,
         Some(config.multi_agent_version_from_features()),
+        GitEnrichmentPolicy::Fresh,
     )
     .await?;
 
