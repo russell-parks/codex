@@ -914,6 +914,7 @@ pub(crate) struct CodexTurnEventParams {
     pub(crate) total_tokens: Option<i64>,
     pub(crate) before_first_sampling_ms: u64,
     pub(crate) sampling_ms: u64,
+    pub(crate) compaction_ms: u64,
     pub(crate) between_sampling_overhead_ms: u64,
     pub(crate) tool_blocking_ms: u64,
     pub(crate) after_last_sampling_ms: u64,
@@ -1025,6 +1026,7 @@ pub(crate) struct CodexPluginInstallFailedEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportCompleteMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) success_count: usize,
@@ -1042,6 +1044,7 @@ pub(crate) struct CodexOnboardingExternalAgentImportCompleteEventRequest {
 pub(crate) struct CodexOnboardingExternalAgentImportFailureMetadata {
     pub(crate) import_id: String,
     pub(crate) source: String,
+    pub(crate) provider_id: String,
     #[serde(rename = "type")]
     pub(crate) item_type: String,
     pub(crate) failure_stage: String,
