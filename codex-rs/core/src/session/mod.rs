@@ -2904,7 +2904,9 @@ impl Session {
             Some(entry) => {
                 let approved = !matches!(
                     decision,
-                    ReviewDecision::Denied | ReviewDecision::TimedOut | ReviewDecision::Abort
+                    ReviewDecision::Denied { .. }
+                        | ReviewDecision::TimedOut
+                        | ReviewDecision::Abort
                 );
                 crate::local_telemetry::record_approval_resolved(
                     &self.services.thread_extension_data,
