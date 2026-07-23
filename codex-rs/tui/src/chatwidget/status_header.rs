@@ -147,7 +147,7 @@ impl StatusHeader {
                 .max(8);
             let directory =
                 crate::text_formatting::center_truncate_path(&self.directory, available);
-            push(vec!["\u{f07c} ".yellow(), Span::from(directory).yellow()]);
+            push(vec!["\u{f07c} ".cyan(), Span::from(directory).cyan()]);
         }
         if let Some(git) = &self.git {
             let mut segment = vec!["\u{f418} ".blue(), Span::from(git.branch.clone()).blue()];
@@ -158,7 +158,7 @@ impl StatusHeader {
                 segment.push(format!(" ↓{}", git.behind).red());
             }
             if git.changed > 0 {
-                segment.push(format!(" +{}", git.changed).yellow());
+                segment.push(format!(" +{}", git.changed).green());
             }
             if git.untracked > 0 {
                 segment.push(format!(" ?{}", git.untracked).red());
