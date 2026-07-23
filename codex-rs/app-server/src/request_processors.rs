@@ -519,33 +519,27 @@ use uuid::Uuid;
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
 
+#[derive(Clone, Copy)]
+pub(super) struct AuthReloadContext<'a> {
+    pub(super) auth_manager: &'a Arc<AuthManager>,
+    pub(super) thread_manager: &'a Arc<ThreadManager>,
+    pub(super) config_manager: &'a ConfigManager,
+    pub(super) outgoing: &'a OutgoingMessageSender,
+    pub(super) chatgpt_base_url: &'a str,
+    pub(super) http_client_factory: codex_http_client::HttpClientFactory,
+}
+
 async fn reload_auth_from_storage_if_idle(
-    auth_manager: &Arc<AuthManager>,
-    thread_manager: &Arc<ThreadManager>,
-    config_manager: &ConfigManager,
-    outgoing: &OutgoingMessageSender,
+    context: AuthReloadContext<'_>,
     thread_watch_manager: &ThreadWatchManager,
-    chatgpt_base_url: &str,
-    http_client_factory: codex_http_client::HttpClientFactory,
     reason: &str,
 ) {
     if *thread_watch_manager.subscribe_running_turn_count().borrow() != 0 {
         return;
     }
 
-    let status = auth_manager.reload_with_status().await;
-    match handle_auth_reload_status(
-        status,
-        auth_manager,
-        thread_manager,
-        config_manager,
-        outgoing,
-        chatgpt_base_url,
-        http_client_factory,
-        reason,
-    )
-    .await
-    {
+    let status = context.auth_manager.reload_with_status().await;
+    match handle_auth_reload_status(status, context, reason).await {
         AuthReloadStatus::Reloaded { .. } => {}
         AuthReloadStatus::Failed => {
             warn!("failed to reload auth from storage before {reason}");
@@ -555,32 +549,31 @@ async fn reload_auth_from_storage_if_idle(
 
 async fn handle_auth_reload_status(
     status: AuthReloadStatus,
-    auth_manager: &Arc<AuthManager>,
-    thread_manager: &Arc<ThreadManager>,
-    config_manager: &ConfigManager,
-    outgoing: &OutgoingMessageSender,
-    chatgpt_base_url: &str,
-    http_client_factory: codex_http_client::HttpClientFactory,
+    context: AuthReloadContext<'_>,
     reason: &str,
 ) -> AuthReloadStatus {
     match status {
         AuthReloadStatus::Reloaded { changed } => {
             if changed {
-                let invalidated_thread_count =
-                    thread_manager.invalidate_model_transport_caches().await;
+                let invalidated_thread_count = context
+                    .thread_manager
+                    .invalidate_model_transport_caches()
+                    .await;
                 info!(
                     "auth reloaded from storage before {reason}; invalidated model transport caches for {invalidated_thread_count} tracked thread(s)"
                 );
-                config_manager.replace_cloud_config_bundle_loader(
-                    Arc::clone(auth_manager),
-                    chatgpt_base_url.to_string(),
-                    http_client_factory,
+                context.config_manager.replace_cloud_config_bundle_loader(
+                    Arc::clone(context.auth_manager),
+                    context.chatgpt_base_url.to_string(),
+                    context.http_client_factory,
                 );
-                config_manager
+                context
+                    .config_manager
                     .sync_default_client_residency_requirement()
                     .await;
-                let auth = auth_manager.auth_cached();
-                outgoing
+                let auth = context.auth_manager.auth_cached();
+                context
+                    .outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(
                         AccountUpdatedNotification {
                             auth_mode: auth
