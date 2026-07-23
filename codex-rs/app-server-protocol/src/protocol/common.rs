@@ -2109,6 +2109,7 @@ mod tests {
             request_id: request_id(),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                reload_auth_from_storage: false,
             },
         };
         assert_eq!(
@@ -3033,6 +3034,7 @@ mod tests {
             request_id: RequestId::Integer(6),
             params: v2::GetAccountParams {
                 refresh_token: false,
+                reload_auth_from_storage: false,
             },
         };
         assert_eq!(
@@ -3047,6 +3049,7 @@ mod tests {
             request_id: RequestId::Integer(7),
             params: v2::GetAccountParams {
                 refresh_token: true,
+                reload_auth_from_storage: false,
             },
         };
         assert_eq!(
