@@ -176,6 +176,7 @@ impl Harness {
                 session_source: &SessionSource::Cli,
                 persistent_thread_state_available: true,
                 environments: &[],
+                mcp_resource_client: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -215,6 +216,7 @@ fn token_usage_info() -> TokenUsageInfo {
         total_token_usage: TokenUsage {
             input_tokens: 10,
             cached_input_tokens: 2,
+            cache_write_input_tokens: 0,
             output_tokens: 4,
             reasoning_output_tokens: 1,
             total_tokens: 15,
@@ -222,6 +224,7 @@ fn token_usage_info() -> TokenUsageInfo {
         last_token_usage: TokenUsage {
             input_tokens: 3,
             cached_input_tokens: 1,
+            cache_write_input_tokens: 0,
             output_tokens: 2,
             reasoning_output_tokens: 1,
             total_tokens: 6,
@@ -246,6 +249,7 @@ fn rate_limit_snapshot() -> RateLimitSnapshot {
             balance: Some("10.00".to_string()),
         }),
         individual_limit: None,
+        spend_control_reached: None,
         plan_type: Some(PlanType::Plus),
         rate_limit_reached_type: Some(RateLimitReachedType::RateLimitReached),
     }
@@ -470,6 +474,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         &codex_analytics::TurnProfile {
             before_first_sampling_ms: 10,
             sampling_ms: 20,
+            compaction_ms: 0,
             between_sampling_overhead_ms: 5,
             tool_blocking_ms: 15,
             after_last_sampling_ms: 8,
@@ -692,6 +697,7 @@ async fn prompt_text_is_stored_only_when_enabled() {
             session_source: &SessionSource::Cli,
             persistent_thread_state_available: false,
             environments: &[],
+            mcp_resource_client: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -771,6 +777,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             session_source: &SessionSource::Cli,
             persistent_thread_state_available: false,
             environments: &[],
+            mcp_resource_client: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -931,6 +938,7 @@ async fn turn_item_capture_stores_opted_in_assistant_text_and_file_change_payloa
             session_source: &SessionSource::Cli,
             persistent_thread_state_available: false,
             environments: &[],
+            mcp_resource_client: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
