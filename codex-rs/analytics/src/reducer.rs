@@ -867,6 +867,7 @@ impl AnalyticsReducer {
                 event_params: CodexOnboardingExternalAgentImportCompleteMetadata {
                     import_id: input.import_id,
                     source: input.source,
+                    provider_id: input.provider_id,
                     item_type: input.item_type,
                     success_count: input.success_count,
                     failed_count: input.failed_count,
@@ -887,6 +888,7 @@ impl AnalyticsReducer {
                 event_params: CodexOnboardingExternalAgentImportFailureMetadata {
                     import_id: input.import_id,
                     source: input.source,
+                    provider_id: input.provider_id,
                     item_type: input.item_type,
                     failure_stage: input.failure_stage,
                     error_type: input.error_type,
@@ -2634,6 +2636,7 @@ fn codex_turn_event_params(
     let TurnProfile {
         before_first_sampling_ms,
         sampling_ms,
+        compaction_ms,
         between_sampling_overhead_ms,
         tool_blocking_ms,
         after_last_sampling_ms,
@@ -2706,6 +2709,7 @@ fn codex_turn_event_params(
             .map(|token_usage| token_usage.total_tokens),
         before_first_sampling_ms,
         sampling_ms,
+        compaction_ms,
         between_sampling_overhead_ms,
         tool_blocking_ms,
         after_last_sampling_ms,
