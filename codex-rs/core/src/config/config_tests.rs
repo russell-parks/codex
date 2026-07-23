@@ -1008,6 +1008,7 @@ fn config_toml_deserializes_model_availability_nux() {
             session_picker_view: None,
             resume_cwd: None,
             keymap: TuiKeymap::default(),
+            usage_limit_resume_prompt: None,
             model_availability_nux: ModelAvailabilityNuxConfig {
                 shown_count: HashMap::from([
                     ("gpt-bar".to_string(), 4),
@@ -3900,6 +3901,7 @@ fn tui_config_missing_notifications_field_defaults_to_enabled() {
             session_picker_view: None,
             resume_cwd: None,
             keymap: TuiKeymap::default(),
+            usage_limit_resume_prompt: None,
             model_availability_nux: ModelAvailabilityNuxConfig::default(),
             terminal_resize_reflow_max_rows: None,
         }

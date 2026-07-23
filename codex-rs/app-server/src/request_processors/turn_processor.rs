@@ -478,6 +478,20 @@ impl TurnRequestProcessor {
         app_server_client_version: Option<String>,
         supports_openai_form_elicitation: bool,
     ) -> Result<TurnStartResponse, JSONRPCErrorError> {
+        reload_auth_from_storage_if_idle(
+            AuthReloadContext {
+                auth_manager: &self.auth_manager,
+                thread_manager: &self.thread_manager,
+                config_manager: &self.config_manager,
+                outgoing: &self.outgoing,
+                chatgpt_base_url: &self.config.chatgpt_base_url,
+                http_client_factory: self.config.http_client_factory(),
+            },
+            &self.thread_watch_manager,
+            "turn/start",
+        )
+        .await;
+
         let (thread_id, thread) =
             self.load_thread(&params.thread_id)
                 .await

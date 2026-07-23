@@ -1005,6 +1005,29 @@ impl AccountRequestProcessor {
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
 
+        if params.reload_auth_from_storage {
+            let status = self.auth_manager.reload_with_status().await;
+            match handle_auth_reload_status(
+                status,
+                AuthReloadContext {
+                    auth_manager: &self.auth_manager,
+                    thread_manager: &self.thread_manager,
+                    config_manager: &self.config_manager,
+                    outgoing: &self.outgoing,
+                    chatgpt_base_url: &self.config.chatgpt_base_url,
+                    http_client_factory: self.config.http_client_factory(),
+                },
+                "account/get",
+            )
+            .await
+            {
+                AuthReloadStatus::Reloaded { .. } => {}
+                AuthReloadStatus::Failed => {
+                    return Err(internal_error("failed to reload auth from storage"));
+                }
+            }
+        }
+
         self.refresh_token_if_requested(do_refresh).await;
 
         let config = self.load_latest_config().await;
