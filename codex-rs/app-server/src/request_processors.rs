@@ -519,7 +519,7 @@ use uuid::Uuid;
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) struct AuthReloadContext<'a> {
     pub(super) auth_manager: &'a Arc<AuthManager>,
     pub(super) thread_manager: &'a Arc<ThreadManager>,
