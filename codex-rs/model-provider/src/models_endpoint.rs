@@ -192,6 +192,8 @@ impl RequestTelemetry for ModelsRequestTelemetry {
         status: Option<http::StatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
+        request_body_bytes: Option<u64>,
+        response_body_bytes: Option<u64>,
     ) {
         let success = status.is_some_and(|code| code.is_success()) && error.is_none();
         let error_message = error.map(telemetry_transport_error_message);
@@ -209,6 +211,8 @@ impl RequestTelemetry for ModelsRequestTelemetry {
             error.message = error_message.as_deref(),
             attempt = attempt,
             endpoint = MODELS_ENDPOINT,
+            request_body_bytes = request_body_bytes,
+            response_body_bytes = response_body_bytes,
             auth.header_attached = self.auth_header_attached,
             auth.header_name = self.auth_header_name,
             auth.env_openai_api_key_present = self.auth_env.openai_api_key_env_present,

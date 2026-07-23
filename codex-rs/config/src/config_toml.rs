@@ -23,6 +23,7 @@ use crate::types::PluginConfig;
 use crate::types::SandboxWorkspaceWrite;
 use crate::types::ShellEnvironmentPolicyToml;
 use crate::types::SkillsConfig;
+use crate::types::TelemetryConfigToml;
 use crate::types::ToolSuggestConfig;
 use crate::types::Tui;
 use crate::types::UriBasedFileOpener;
@@ -492,6 +493,9 @@ pub struct ConfigToml {
     /// Opaque desktop settings stored alongside the rest of config.toml.
     #[serde(default)]
     pub desktop: Option<HashMap<String, JsonValue>>,
+
+    /// Local telemetry configuration.
+    pub telemetry: Option<TelemetryConfigToml>,
 
     /// OTEL configuration.
     pub otel: Option<OtelConfigToml>,

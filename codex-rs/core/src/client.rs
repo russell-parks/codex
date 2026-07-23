@@ -2323,6 +2323,8 @@ impl RequestTelemetry for ApiTelemetry {
         status: Option<HttpStatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
+        request_body_bytes: Option<u64>,
+        response_body_bytes: Option<u64>,
     ) {
         let error_message = error.map(telemetry_transport_error_message);
         let status = status.map(|s| s.as_u16());
@@ -2334,6 +2336,8 @@ impl RequestTelemetry for ApiTelemetry {
             status,
             error_message.as_deref(),
             duration,
+            request_body_bytes,
+            response_body_bytes,
             self.auth_context.auth_header_attached,
             self.auth_context.auth_header_name,
             self.auth_context.retry_after_unauthorized,
@@ -2376,6 +2380,10 @@ impl RequestTelemetry for ApiTelemetry {
 }
 
 impl SseTelemetry for ApiTelemetry {
+    fn on_sse_bytes(&self, bytes: u64) {
+        self.session_telemetry.record_sse_bytes_read(bytes);
+    }
+
     fn on_sse_poll(
         &self,
         result: &std::result::Result<

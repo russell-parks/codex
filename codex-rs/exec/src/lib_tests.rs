@@ -1,4 +1,5 @@
 use super::*;
+use codex_local_telemetry::TELEMETRY_SCHEMA_VERSION;
 use codex_otel::set_parent_from_w3c_trace_context;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::ActivePermissionProfile;
@@ -252,6 +253,166 @@ fn prompt_with_stdin_context_preserves_trailing_newline() {
         combined,
         "Summarize this concisely\n\n<stdin>\nmy output\n</stdin>"
     );
+}
+
+#[tokio::test]
+async fn patch_local_telemetry_summary_sets_success_exit_code() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build default config");
+    config.telemetry.local.enabled = true;
+    config.telemetry.local.directory = "telemetry".to_string();
+
+    let summary_path =
+        summary_file_path(resolve_telemetry_root(&config).as_path(), "session-success");
+    std::fs::create_dir_all(
+        summary_path
+            .parent()
+            .expect("summary path should have parent directory"),
+    )
+    .expect("create telemetry runs directory");
+    let summary = LocalTelemetrySessionSummary {
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        session_id: "session-success".to_string(),
+        started_at: "2026-06-20T12:00:00Z".to_string(),
+        ended_at: Some("2026-06-20T12:05:00Z".to_string()),
+        duration_ms: Some(300_000),
+        final_outcome: None,
+        abort_reason: None,
+        exit_status_code: None,
+        invocation_mode: "exec".to_string(),
+        session_source: "exec".to_string(),
+        model: Some("gpt-5".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        approval_policy: Some("on-request".to_string()),
+        sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
+        cwd: Some(cwd.path().display().to_string()),
+        repo_root: Some(cwd.path().display().to_string()),
+        git: None,
+        config_snapshot: None,
+        prompt_metadata: Default::default(),
+        raw_event_path: codex_home
+            .path()
+            .join("telemetry/events/session-success.jsonl")
+            .display()
+            .to_string(),
+        rollout_path: None,
+        usage_totals: Default::default(),
+        turn_counts: Default::default(),
+        tool_summary: Default::default(),
+        runtime_summary: Default::default(),
+        task_types: vec!["regular".to_string()],
+        approval_summary: Default::default(),
+        error_summary: Default::default(),
+        changed_files_summary: Default::default(),
+        resumed_from: None,
+        forked_from: None,
+    };
+    std::fs::write(
+        &summary_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).expect("serialize summary")
+        ),
+    )
+    .expect("write summary file");
+
+    patch_local_telemetry_summary(&config, "session-success", 0, "completed").await;
+
+    let updated = serde_json::from_str::<LocalTelemetrySessionSummary>(
+        &std::fs::read_to_string(&summary_path).expect("read patched summary"),
+    )
+    .expect("deserialize patched summary");
+    assert_eq!(updated.final_outcome.as_deref(), Some("completed"));
+    assert_eq!(updated.abort_reason, None);
+    assert_eq!(updated.exit_status_code, Some(0));
+}
+
+#[tokio::test]
+async fn patch_local_telemetry_summary_preserves_interrupted_outcome() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let mut config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build default config");
+    config.telemetry.local.enabled = true;
+    config.telemetry.local.directory = "telemetry".to_string();
+
+    let summary_path = summary_file_path(
+        resolve_telemetry_root(&config).as_path(),
+        "session-interrupted",
+    );
+    std::fs::create_dir_all(
+        summary_path
+            .parent()
+            .expect("summary path should have parent directory"),
+    )
+    .expect("create telemetry runs directory");
+    let summary = LocalTelemetrySessionSummary {
+        schema_version: TELEMETRY_SCHEMA_VERSION,
+        session_id: "session-interrupted".to_string(),
+        started_at: "2026-06-20T12:00:00Z".to_string(),
+        ended_at: Some("2026-06-20T12:05:00Z".to_string()),
+        duration_ms: Some(300_000),
+        final_outcome: Some("interrupted".to_string()),
+        abort_reason: Some("interrupted".to_string()),
+        exit_status_code: None,
+        invocation_mode: "exec".to_string(),
+        session_source: "exec".to_string(),
+        model: Some("gpt-5".to_string()),
+        reasoning_effort: Some("medium".to_string()),
+        approval_policy: Some("on-request".to_string()),
+        sandbox_mode: Some("workspace-write".to_string()),
+        active_profile: Some("safe".to_string()),
+        cwd: Some(cwd.path().display().to_string()),
+        repo_root: Some(cwd.path().display().to_string()),
+        git: None,
+        config_snapshot: None,
+        prompt_metadata: Default::default(),
+        raw_event_path: codex_home
+            .path()
+            .join("telemetry/events/session-interrupted.jsonl")
+            .display()
+            .to_string(),
+        rollout_path: None,
+        usage_totals: Default::default(),
+        turn_counts: Default::default(),
+        tool_summary: Default::default(),
+        runtime_summary: Default::default(),
+        task_types: vec!["regular".to_string()],
+        approval_summary: Default::default(),
+        error_summary: Default::default(),
+        changed_files_summary: Default::default(),
+        resumed_from: None,
+        forked_from: None,
+    };
+    std::fs::write(
+        &summary_path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&summary).expect("serialize summary")
+        ),
+    )
+    .expect("write summary file");
+
+    patch_local_telemetry_summary(&config, "session-interrupted", 1, "failed").await;
+
+    let updated = serde_json::from_str::<LocalTelemetrySessionSummary>(
+        &std::fs::read_to_string(&summary_path).expect("read patched summary"),
+    )
+    .expect("deserialize patched summary");
+    assert_eq!(updated.final_outcome.as_deref(), Some("interrupted"));
+    assert_eq!(updated.abort_reason.as_deref(), Some("interrupted"));
+    assert_eq!(updated.exit_status_code, Some(1));
 }
 
 #[test]

@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
 clap = { workspace = true, features = ["derive", "env"] }
 clap_complete = { workspace = true }
 codex-app-server = { workspace = true }
@@ -44,6 +45,7 @@ codex-git-attribution = { workspace = true }
 codex-git-utils = { workspace = true }
 codex-install-context = { workspace = true }
 codex-login = { workspace = true }
+codex-local-telemetry = { workspace = true }
 codex-memories-write = { workspace = true }
 codex-mcp = { workspace = true }
 codex-mcp-server = { workspace = true }
@@ -102,6 +104,7 @@ app_test_support = { workspace = true }
 assert_cmd = { workspace = true }
 assert_matches = { workspace = true }
 codex-utils-cargo-bin = { workspace = true }
+core_test_support = { workspace = true }
 insta = { workspace = true }
 predicates = { workspace = true }
 pretty_assertions = { workspace = true }

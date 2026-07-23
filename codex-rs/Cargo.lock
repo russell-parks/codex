@@ -1984,6 +1984,7 @@ dependencies = [
  "codex-hooks",
  "codex-http-client",
  "codex-image-generation-extension",
+ "codex-local-telemetry-extension",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -2315,6 +2316,7 @@ dependencies = [
  "app_test_support",
  "assert_cmd",
  "assert_matches",
+ "chrono",
  "clap",
  "clap_complete",
  "codex-api",
@@ -2338,6 +2340,7 @@ dependencies = [
  "codex-home",
  "codex-http-client",
  "codex-install-context",
+ "codex-local-telemetry",
  "codex-login",
  "codex-mcp",
  "codex-mcp-server",
@@ -2360,6 +2363,7 @@ dependencies = [
  "codex-utils-cli",
  "codex-utils-path",
  "codex-windows-sandbox",
+ "core_test_support",
  "crossterm",
  "http 1.4.0",
  "insta",
@@ -2657,6 +2661,8 @@ dependencies = [
  "codex-http-client",
  "codex-image-generation-extension",
  "codex-install-context",
+ "codex-local-telemetry",
+ "codex-local-telemetry-extension",
  "codex-login",
  "codex-mcp",
  "codex-memories-read",
@@ -2870,6 +2876,7 @@ dependencies = [
  "codex-core",
  "codex-feedback",
  "codex-git-utils",
+ "codex-local-telemetry",
  "codex-login",
  "codex-model-provider-info",
  "codex-otel",
@@ -3332,6 +3339,33 @@ dependencies = [
  "tracing",
  "which 8.0.0",
  "wiremock",
+]
+
+[[package]]
+name = "codex-local-telemetry"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "codex-local-telemetry-extension"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-analytics",
+ "codex-extension-api",
+ "codex-local-telemetry",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

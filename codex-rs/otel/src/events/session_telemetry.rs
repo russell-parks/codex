@@ -5,6 +5,8 @@ use crate::events::shared::log_event;
 use crate::events::shared::trace_event;
 use crate::metrics::API_CALL_COUNT_METRIC;
 use crate::metrics::API_CALL_DURATION_METRIC;
+use crate::metrics::API_REQUEST_BYTES_WRITTEN_METRIC;
+use crate::metrics::API_RESPONSE_BYTES_READ_METRIC;
 use crate::metrics::MetricsClient;
 use crate::metrics::MetricsConfig;
 use crate::metrics::MetricsError;
@@ -17,6 +19,7 @@ use crate::metrics::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
 use crate::metrics::RESPONSES_API_OVERHEAD_DURATION_METRIC;
 use crate::metrics::Result as MetricsResult;
+use crate::metrics::SSE_BYTES_READ_METRIC;
 use crate::metrics::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::STARTUP_PHASE_DURATION_METRIC;
@@ -527,6 +530,8 @@ impl SessionTelemetry {
             status,
             error.as_deref(),
             duration,
+            /*request_body_bytes*/ None,
+            /*response_body_bytes*/ None,
             /*auth_header_attached*/ false,
             /*auth_header_name*/ None,
             /*retry_after_unauthorized*/ false,
@@ -550,6 +555,8 @@ impl SessionTelemetry {
         status: Option<u16>,
         error: Option<&str>,
         duration: Duration,
+        request_body_bytes: Option<u64>,
+        response_body_bytes: Option<u64>,
         auth_header_attached: bool,
         auth_header_name: Option<&str>,
         retry_after_unauthorized: bool,
@@ -577,6 +584,20 @@ impl SessionTelemetry {
             duration,
             &[("status", status_str.as_str()), ("success", success_str)],
         );
+        if let Some(request_body_bytes) = request_body_bytes {
+            self.counter(
+                API_REQUEST_BYTES_WRITTEN_METRIC,
+                i64::try_from(request_body_bytes).unwrap_or(i64::MAX),
+                &[("status", status_str.as_str()), ("success", success_str)],
+            );
+        }
+        if let Some(response_body_bytes) = response_body_bytes {
+            self.counter(
+                API_RESPONSE_BYTES_READ_METRIC,
+                i64::try_from(response_body_bytes).unwrap_or(i64::MAX),
+                &[("status", status_str.as_str()), ("success", success_str)],
+            );
+        }
         log_and_trace_event!(
             self,
             common: {
@@ -585,6 +606,8 @@ impl SessionTelemetry {
                 http.response.status_code = status,
                 error.message = error,
                 attempt = attempt,
+                request_body_bytes = request_body_bytes,
+                response_body_bytes = response_body_bytes,
                 auth.header_attached = auth_header_attached,
                 auth.header_name = auth_header_name,
                 auth.retry_after_unauthorized = retry_after_unauthorized,
@@ -606,6 +629,14 @@ impl SessionTelemetry {
             },
             log: {},
             trace: {},
+        );
+    }
+
+    pub fn record_sse_bytes_read(&self, bytes: u64) {
+        self.counter(
+            SSE_BYTES_READ_METRIC,
+            i64::try_from(bytes).unwrap_or(i64::MAX),
+            &[],
         );
     }
 

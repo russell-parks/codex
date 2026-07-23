@@ -51,6 +51,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         Some(200),
         /*error*/ None,
         Duration::from_millis(300),
+        /*request_body_bytes*/ Some(128),
+        /*response_body_bytes*/ Some(512),
         /*auth_header_attached*/ false,
         /*auth_header_name*/ None,
         /*retry_after_unauthorized*/ false,
@@ -78,6 +80,7 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
         id: String::new(),
         retry: None,
     })));
+    manager.record_sse_bytes_read(1024);
     manager.log_sse_event(&sse_response, Duration::from_millis(120));
     let ws_response: std::result::Result<
         Option<std::result::Result<Message, tokio_tungstenite::tungstenite::Error>>,
@@ -129,6 +132,8 @@ fn runtime_metrics_summary_collects_tool_api_and_streaming_metrics() -> Result<(
             count: 2,
             duration_ms: 100,
         },
+        bytes_written: 128,
+        bytes_read: 1536,
         responses_api_overhead_ms: 124,
         responses_api_inference_time_ms: 457,
         responses_api_engine_iapi_ttft_ms: 211,

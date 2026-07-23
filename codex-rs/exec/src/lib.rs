@@ -74,6 +74,8 @@ use codex_core::format_exec_policy_error_with_source;
 use codex_core::path_utils;
 use codex_feedback::CodexFeedback;
 use codex_git_utils::get_git_repo_root;
+use codex_local_telemetry::SessionSummary as LocalTelemetrySessionSummary;
+use codex_local_telemetry::summary_file_path;
 use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
@@ -1055,6 +1057,13 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     if let Err(err) = client.shutdown().await {
         warn!("in-process app-server shutdown failed: {err}");
     }
+    patch_local_telemetry_summary(
+        &config,
+        primary_thread_id_for_requests.as_str(),
+        if error_seen { 1 } else { 0 },
+        if error_seen { "failed" } else { "completed" },
+    )
+    .await;
     event_processor.print_final_output();
     if error_seen {
         std::process::exit(1);
@@ -1084,6 +1093,80 @@ fn thread_start_params_from_config(config: &Config) -> ThreadStartParams {
         ephemeral: Some(config.ephemeral),
         thread_source: Some(ThreadSource::User),
         ..ThreadStartParams::default()
+    }
+}
+
+async fn patch_local_telemetry_summary(
+    config: &Config,
+    session_id: &str,
+    exit_status_code: i32,
+    final_outcome: &str,
+) {
+    if !config.telemetry.local.enabled {
+        return;
+    }
+
+    let summary_path = summary_file_path(resolve_telemetry_root(config).as_path(), session_id);
+    let summary_payload = match tokio::fs::read_to_string(summary_path.as_path()).await {
+        Ok(payload) => payload,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
+        Err(err) => {
+            warn!(
+                "failed to read local telemetry summary at {}: {err}",
+                summary_path.display()
+            );
+            return;
+        }
+    };
+
+    let mut summary = match serde_json::from_str::<LocalTelemetrySessionSummary>(&summary_payload) {
+        Ok(summary) => summary,
+        Err(err) => {
+            warn!(
+                "failed to parse local telemetry summary at {}: {err}",
+                summary_path.display()
+            );
+            return;
+        }
+    };
+
+    summary.exit_status_code = Some(exit_status_code);
+    if summary.final_outcome.as_deref() != Some("interrupted") {
+        summary.final_outcome = Some(final_outcome.to_string());
+    }
+
+    let mut payload = match serde_json::to_vec_pretty(&summary) {
+        Ok(payload) => payload,
+        Err(err) => {
+            warn!(
+                "failed to serialize local telemetry summary at {}: {err}",
+                summary_path.display()
+            );
+            return;
+        }
+    };
+    payload.push(b'\n');
+    if let Err(err) = tokio::fs::write(summary_path.as_path(), payload).await {
+        warn!(
+            "failed to update local telemetry summary at {}: {err}",
+            summary_path.display()
+        );
+    }
+}
+
+fn resolve_telemetry_root(config: &Config) -> PathBuf {
+    let configured = &config.telemetry.local.directory;
+    if let Some(stripped) = configured.strip_prefix("~/")
+        && let Some(home_dir) = config.codex_home.parent()
+    {
+        return home_dir.join(stripped).to_path_buf();
+    }
+
+    let configured_path = PathBuf::from(configured);
+    if configured_path.is_absolute() {
+        configured_path
+    } else {
+        config.codex_home.join(configured_path).to_path_buf()
     }
 }
 

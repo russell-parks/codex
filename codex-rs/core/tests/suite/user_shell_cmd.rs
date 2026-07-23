@@ -1,5 +1,6 @@
 use anyhow::Context;
 use codex_features::Feature;
+use codex_protocol::config_types::EnvironmentVariablePattern;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::permissions::NetworkSandboxPolicy;
 use codex_protocol::protocol::AskForApproval;
@@ -385,6 +386,9 @@ async fn user_shell_command_does_not_set_network_sandbox_env_var() -> anyhow::Re
     let server = responses::start_mock_server().await;
     let mut builder = core_test_support::test_codex::test_codex().with_config(|config| {
         let file_system_sandbox_policy = config.permissions.file_system_sandbox_policy();
+        config.permissions.shell_environment_policy.exclude.push(
+            EnvironmentVariablePattern::new_case_insensitive("CODEX_SANDBOX_NETWORK_DISABLED"),
+        );
         config
             .permissions
             .set_permission_profile(PermissionProfile::from_runtime_permissions(

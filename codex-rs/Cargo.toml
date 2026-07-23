@@ -56,6 +56,7 @@ members = [
     "ext/guardian",
     "ext/image-generation",
     "ext/items",
+    "ext/local-telemetry",
     "ext/memories",
     "ext/mcp",
     "ext/skills",
@@ -67,6 +68,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "local-telemetry",
     "codex-mcp",
     "mcp-server",
     "memories/read",
@@ -201,6 +203,8 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-local-telemetry = { path = "local-telemetry" }
+codex-local-telemetry-extension = { path = "ext/local-telemetry" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }
 codex-web-search-extension = { path = "ext/web-search" }

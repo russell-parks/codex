@@ -228,6 +228,111 @@ pub struct FeedbackConfigToml {
     pub enabled: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct TelemetryConfigToml {
+    /// User-owned local telemetry stored on disk under the Codex state
+    /// directory.
+    #[serde(default)]
+    pub local: Option<LocalTelemetryConfigToml>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct LocalTelemetryConfigToml {
+    /// Enables the local telemetry store and CLI analysis commands.
+    pub enabled: Option<bool>,
+    /// Telemetry root directory. Relative paths resolve under the Codex home
+    /// directory; `~/...` expands relative to the user's home directory.
+    pub directory: Option<String>,
+    /// Retention window, in days, for local telemetry data.
+    pub retention_days: Option<i64>,
+    /// Persist full user prompt text in local telemetry artifacts.
+    pub log_user_prompt: Option<bool>,
+    /// Persist assistant response text in local telemetry artifacts.
+    pub log_assistant_text: Option<bool>,
+    /// Persist opt-in visible tool-result turn items in local telemetry
+    /// artifacts.
+    pub log_tool_output: Option<bool>,
+    /// Persist visible file-change turn items and diff metadata in local
+    /// telemetry artifacts.
+    pub log_diffs: Option<bool>,
+    /// Record a SHA-256 hash for user prompts without storing full prompt text.
+    pub hash_prompts: Option<bool>,
+    /// Capture session start and stop events.
+    pub capture_session: Option<bool>,
+    /// Capture turn lifecycle events and prompt metadata.
+    pub capture_turns: Option<bool>,
+    /// Capture token usage checkpoints and usage totals.
+    pub capture_usage: Option<bool>,
+    /// Capture tool call lifecycle events and summaries.
+    pub capture_tool_calls: Option<bool>,
+    /// Capture human approval requests and decisions.
+    pub capture_approvals: Option<bool>,
+    /// Capture sanitized git metadata for the run.
+    pub capture_git: Option<bool>,
+    /// Capture a sanitized snapshot of effective config sources.
+    pub capture_config_snapshot: Option<bool>,
+    /// Capture error events and error summaries.
+    pub capture_errors: Option<bool>,
+    /// Write a derived per-session summary JSON file.
+    pub write_run_summary: Option<bool>,
+    /// Write derived daily rollup JSON files grouped by day.
+    pub write_daily_rollups: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct TelemetryConfig {
+    pub local: LocalTelemetryConfig,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalTelemetryConfig {
+    pub enabled: bool,
+    pub directory: String,
+    pub retention_days: i64,
+    pub log_user_prompt: bool,
+    pub log_assistant_text: bool,
+    pub log_tool_output: bool,
+    pub log_diffs: bool,
+    pub hash_prompts: bool,
+    pub capture_session: bool,
+    pub capture_turns: bool,
+    pub capture_usage: bool,
+    pub capture_tool_calls: bool,
+    pub capture_approvals: bool,
+    pub capture_git: bool,
+    pub capture_config_snapshot: bool,
+    pub capture_errors: bool,
+    pub write_run_summary: bool,
+    pub write_daily_rollups: bool,
+}
+
+impl Default for LocalTelemetryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            directory: "~/.codex/telemetry".to_string(),
+            retention_days: 90,
+            log_user_prompt: false,
+            log_assistant_text: false,
+            log_tool_output: false,
+            log_diffs: false,
+            hash_prompts: true,
+            capture_session: true,
+            capture_turns: true,
+            capture_usage: true,
+            capture_tool_calls: true,
+            capture_approvals: true,
+            capture_git: true,
+            capture_config_snapshot: true,
+            capture_errors: true,
+            write_run_summary: true,
+            write_daily_rollups: true,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Hash, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolSuggestDiscoverableType {

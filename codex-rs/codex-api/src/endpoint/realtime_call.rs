@@ -680,15 +680,14 @@ mod tests {
             .as_object_mut()
             .expect("session should be an object")
             .remove("id");
+        let expected_body = to_value(BackendRealtimeCallRequest {
+            sdp: "v=offer\r\n",
+            session: &expected_session,
+        })
+        .expect("request should encode");
         assert_eq!(
-            request.body,
-            Some(RequestBody::Json(
-                to_value(BackendRealtimeCallRequest {
-                    sdp: "v=offer\r\n",
-                    session: &expected_session,
-                })
-                .expect("request should encode")
-            ))
+            request.body.as_ref().and_then(RequestBody::json),
+            Some(&expected_body)
         );
     }
 

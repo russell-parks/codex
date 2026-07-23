@@ -1394,6 +1394,85 @@
     "LegacyAppPathString": {
       "type": "string"
     },
+    "LocalTelemetryConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "capture_approvals": {
+          "description": "Capture human approval requests and decisions.",
+          "type": "boolean"
+        },
+        "capture_config_snapshot": {
+          "description": "Capture a sanitized snapshot of effective config sources.",
+          "type": "boolean"
+        },
+        "capture_errors": {
+          "description": "Capture error events and error summaries.",
+          "type": "boolean"
+        },
+        "capture_git": {
+          "description": "Capture sanitized git metadata for the run.",
+          "type": "boolean"
+        },
+        "capture_session": {
+          "description": "Capture session start and stop events.",
+          "type": "boolean"
+        },
+        "capture_tool_calls": {
+          "description": "Capture tool call lifecycle events and summaries.",
+          "type": "boolean"
+        },
+        "capture_turns": {
+          "description": "Capture turn lifecycle events and prompt metadata.",
+          "type": "boolean"
+        },
+        "capture_usage": {
+          "description": "Capture token usage checkpoints and usage totals.",
+          "type": "boolean"
+        },
+        "directory": {
+          "description": "Telemetry root directory. Relative paths resolve under the Codex home directory; `~/...` expands relative to the user's home directory.",
+          "type": "string"
+        },
+        "enabled": {
+          "description": "Enables the local telemetry store and CLI analysis commands.",
+          "type": "boolean"
+        },
+        "hash_prompts": {
+          "description": "Record a SHA-256 hash for user prompts without storing full prompt text.",
+          "type": "boolean"
+        },
+        "log_assistant_text": {
+          "description": "Persist assistant response text in local telemetry artifacts.",
+          "type": "boolean"
+        },
+        "log_diffs": {
+          "description": "Persist visible file-change turn items and diff metadata in local telemetry artifacts.",
+          "type": "boolean"
+        },
+        "log_tool_output": {
+          "description": "Persist opt-in visible tool-result turn items in local telemetry artifacts.",
+          "type": "boolean"
+        },
+        "log_user_prompt": {
+          "description": "Persist full user prompt text in local telemetry artifacts.",
+          "type": "boolean"
+        },
+        "retention_days": {
+          "description": "Retention window, in days, for local telemetry data.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "write_daily_rollups": {
+          "description": "Write derived daily rollup JSON files grouped by day.",
+          "type": "boolean"
+        },
+        "write_run_summary": {
+          "description": "Write a derived per-session summary JSON file.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "MarketplaceConfig": {
       "additionalProperties": false,
       "properties": {
@@ -3024,6 +3103,21 @@
       },
       "type": "object"
     },
+    "TelemetryConfigToml": {
+      "additionalProperties": false,
+      "properties": {
+        "local": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/LocalTelemetryConfigToml"
+            }
+          ],
+          "default": null,
+          "description": "User-owned local telemetry stored on disk under the Codex state directory."
+        }
+      },
+      "type": "object"
+    },
     "ThreadStoreToml": {
       "oneOf": [
         {
@@ -3436,7 +3530,7 @@
         },
         "usage_limit_resume_prompt": {
           "default": null,
-          "description": "Optional synthetic user-turn prompt injected after a turn fails with `UsageLimitExceeded`.\n\nWhen unset, Codex uses the built-in default recovery prompt. When set to an empty string, Codext disables this automatic recovery turn.",
+          "description": "Optional synthetic user-turn prompt injected after a turn fails with `UsageLimitExceeded`.\n\nWhen unset, Codex uses the built-in default recovery prompt. When set to an empty string, Codex disables this automatic recovery turn.",
           "type": "string"
         },
         "vim_mode_default": {
@@ -5649,6 +5743,14 @@
     "suppress_unstable_features_warning": {
       "description": "Suppress warnings about unstable (under development) features.",
       "type": "boolean"
+    },
+    "telemetry": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/TelemetryConfigToml"
+        }
+      ],
+      "description": "Local telemetry configuration."
     },
     "tool_output_token_limit": {
       "description": "Token budget applied when storing tool/function outputs in the context manager.",

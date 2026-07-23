@@ -5671,6 +5671,24 @@ async fn feedback_enabled_defaults_to_true() -> std::io::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn load_config_applies_local_telemetry_defaults() -> std::io::Result<()> {
+    let home = tempfile::tempdir()?;
+    tokio::fs::write(home.path().join("config.toml"), "").await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(home.path().to_path_buf())
+        .build()
+        .await?;
+
+    assert!(config.telemetry.local.enabled);
+    assert_eq!(config.telemetry.local.directory, "~/.codex/telemetry");
+    assert!(config.telemetry.local.hash_prompts);
+    assert!(!config.telemetry.local.log_user_prompt);
+    assert!(config.telemetry.local.write_daily_rollups);
+    Ok(())
+}
+
 #[test]
 fn web_search_mode_defaults_to_none_if_unset() {
     let cfg = ConfigToml::default();
