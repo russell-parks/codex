@@ -300,6 +300,7 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
             String::from("self_serve_business_usage_based")
         }
         codex_protocol::account::PlanType::Business => String::from("business"),
+        codex_protocol::account::PlanType::Ent26 => String::from("ent26"),
         codex_protocol::account::PlanType::EnterpriseCbpUsageBased => {
             String::from("enterprise_cbp_usage_based")
         }
