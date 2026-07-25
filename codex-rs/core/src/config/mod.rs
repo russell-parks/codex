@@ -274,18 +274,16 @@ const LOCAL_DEV_BUILD_VERSION: &str = "0.0.0";
 pub const CONFIG_TOML_FILE: &str = "config.toml";
 const CONFIG_PROFILE_V2_SUFFIX: &str = ".config.toml";
 
-fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<PathBuf> {
+fn resolve_sqlite_home_env(resolved_cwd: &Path) -> Option<AbsolutePathBuf> {
     let raw = std::env::var(codex_state::SQLITE_HOME_ENV).ok()?;
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
     }
-    let path = PathBuf::from(trimmed);
-    if path.is_absolute() {
-        Some(path)
-    } else {
-        Some(resolved_cwd.join(path))
-    }
+    Some(AbsolutePathBuf::resolve_path_against_base(
+        trimmed,
+        resolved_cwd,
+    ))
 }
 
 fn resolve_cli_auth_credentials_store_mode(
@@ -902,8 +900,8 @@ pub struct Config {
     /// overridden by the `CODEX_HOME` environment variable).
     pub codex_home: AbsolutePathBuf,
 
-    /// Directory where Codex stores the SQLite state DB.
-    pub sqlite_home: PathBuf,
+    /// Resolved configuration shared by all Codex SQLite databases.
+    pub sqlite: codex_state::SqliteConfig,
 
     /// Directory where Codex writes log files (defaults to `$CODEX_HOME/log`).
     pub log_dir: PathBuf,
@@ -1041,6 +1039,9 @@ pub struct Config {
     /// Whether to register the experimental request_user_input tool.
     pub experimental_request_user_input_enabled: bool,
 
+    /// Whether to register the update_plan tool.
+    pub update_plan_enabled: bool,
+
     /// Configuration for the experimental code-mode tool surface.
     pub code_mode: CodeModeConfig,
 
@@ -1110,6 +1111,7 @@ pub struct Config {
 pub struct CodeModeConfig {
     pub excluded_tool_namespaces: Vec<String>,
     pub direct_only_tool_namespaces: Vec<String>,
+    pub disable_in_process_fallback: bool,
 }
 
 pub(crate) const DEFAULT_TOKEN_BUDGET_REMINDER_MESSAGE_TEMPLATE: &str = concat!(
@@ -1449,6 +1451,10 @@ impl ConfigBuilder {
 }
 
 impl Config {
+    pub fn sqlite_config(&self) -> &codex_state::SqliteConfig {
+        &self.sqlite
+    }
+
     pub(crate) fn multi_agent_version_override(&self) -> Option<MultiAgentVersion> {
         if self.features.enabled(Feature::MultiAgentV2) {
             Some(MultiAgentVersion::V2)
@@ -2001,6 +2007,13 @@ fn filter_plugin_mcp_servers_by_requirements(
     let Some(requirements) = plugin_requirements else {
         return;
     };
+    if !requirements
+        .value
+        .values()
+        .any(|plugin| plugin.mcp_servers.is_some())
+    {
+        return;
+    }
     let source = requirements.source.clone();
     let plugin_mcp_requirements = requirements
         .value
@@ -2547,6 +2560,14 @@ fn resolve_experimental_request_user_input_enabled(config_toml: &ConfigToml) -> 
         .is_none_or(|config| config.enabled)
 }
 
+fn resolve_update_plan_enabled(config_toml: &ConfigToml) -> bool {
+    config_toml
+        .tools
+        .as_ref()
+        .and_then(|tools| tools.update_plan.as_ref())
+        .is_none_or(|config| config.enabled)
+}
+
 fn resolve_orchestrator_feature_enabled(
     feature: Option<&codex_config::config_toml::OrchestratorFeatureToml>,
 ) -> bool {
@@ -2555,6 +2576,14 @@ fn resolve_orchestrator_feature_enabled(
 
 fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
     let base = code_mode_toml_config(config_toml.features.as_ref());
+    let host = config_toml
+        .features
+        .as_ref()
+        .and_then(|features| features.code_mode_host.as_ref())
+        .and_then(|feature| match feature {
+            FeatureToml::Enabled(_) => None,
+            FeatureToml::Config(config) => Some(config),
+        });
 
     CodeModeConfig {
         excluded_tool_namespaces: base
@@ -2564,6 +2593,9 @@ fn resolve_code_mode_config(config_toml: &ConfigToml) -> CodeModeConfig {
         direct_only_tool_namespaces: base
             .and_then(|config| config.direct_only_tool_namespaces.as_ref())
             .cloned()
+            .unwrap_or_default(),
+        disable_in_process_fallback: host
+            .and_then(|config| config.disable_in_process_fallback)
             .unwrap_or_default(),
     }
 }
@@ -2937,13 +2969,22 @@ pub fn resolve_bootstrap_auth_route_config(
     cfg: &ConfigToml,
     feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
 ) -> std::io::Result<AuthRouteConfig> {
+    resolve_bootstrap_http_client_factory(cfg, feature_requirements)
+        .map(AuthRouteConfig::from_http_client_factory)
+}
+
+/// Resolves shared HTTP routing for startup work that runs before final [`Config`] loading.
+pub fn resolve_bootstrap_http_client_factory(
+    cfg: &ConfigToml,
+    feature_requirements: Option<&Sourced<FeatureRequirementsToml>>,
+) -> std::io::Result<HttpClientFactory> {
     resolve_bootstrap_respect_system_proxy(cfg, feature_requirements).map(|respect_system_proxy| {
         let outbound_proxy_policy = if respect_system_proxy {
             OutboundProxyPolicy::RespectSystemProxy
         } else {
             OutboundProxyPolicy::ReqwestDefault
         };
-        AuthRouteConfig::from_http_client_factory(HttpClientFactory::new(outbound_proxy_policy))
+        HttpClientFactory::new(outbound_proxy_policy)
     })
 }
 
@@ -3578,6 +3619,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg);
         let experimental_request_user_input_enabled =
             resolve_experimental_request_user_input_enabled(&cfg);
+        let update_plan_enabled = resolve_update_plan_enabled(&cfg);
         let code_mode = resolve_code_mode_config(&cfg);
         let multi_agent_v2 = resolve_multi_agent_v2_config(&cfg);
         let token_budget = resolve_token_budget_config(&cfg, &features)?;
@@ -3834,9 +3876,9 @@ impl Config {
         let sqlite_home = cfg
             .sqlite_home
             .as_ref()
-            .map(AbsolutePathBuf::to_path_buf)
+            .cloned()
             .or(sqlite_home_env)
-            .unwrap_or_else(|| codex_home.to_path_buf());
+            .unwrap_or_else(|| codex_home.clone());
         let original_permission_profile = permission_profile.clone();
         apply_requirement_constrained_value(
             "approval_policy",
@@ -4032,7 +4074,7 @@ impl Config {
             memories: memories_config,
             agent_interrupt_message_enabled,
             codex_home,
-            sqlite_home,
+            sqlite: codex_state::SqliteConfig::from_sqlite_home(sqlite_home),
             log_dir,
             config_lock_export_dir: cfg
                 .debug
@@ -4110,6 +4152,7 @@ impl Config {
             web_search_mode: constrained_web_search_mode.value,
             web_search_config,
             experimental_request_user_input_enabled,
+            update_plan_enabled,
             code_mode,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
