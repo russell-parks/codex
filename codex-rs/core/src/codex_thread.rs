@@ -608,9 +608,12 @@ impl CodexThread {
         self.session.get_config().await
     }
 
-    /// Resolves the MCP runtime configuration using this thread's extension data.
-    pub async fn runtime_mcp_config(&self, config: &crate::config::Config) -> codex_mcp::McpConfig {
-        self.session.runtime_mcp_config(config).await
+    /// Resolves MCP configuration and environment bindings from the same config snapshot.
+    pub async fn runtime_mcp_config_and_context(
+        &self,
+        config: &crate::config::Config,
+    ) -> (codex_mcp::McpConfig, codex_mcp::McpRuntimeContext) {
+        self.session.runtime_mcp_config_and_context(config).await
     }
 
     /// Captures the exact MCP config and environment bindings for the current thread state.
@@ -618,8 +621,7 @@ impl CodexThread {
         &self,
     ) -> (Arc<codex_mcp::McpConfig>, codex_mcp::McpRuntimeContext) {
         let config = self.session.get_config().await;
-        let (mcp_config, runtime_context) =
-            self.session.runtime_mcp_config_and_context(&config).await;
+        let (mcp_config, runtime_context) = self.runtime_mcp_config_and_context(&config).await;
         (Arc::new(mcp_config), runtime_context)
     }
 
@@ -632,6 +634,11 @@ impl CodexThread {
     /// unchanged.
     pub async fn refresh_runtime_config(&self, next_config: crate::config::Config) {
         self.session.refresh_runtime_config(next_config).await;
+    }
+
+    /// Refresh MCP configuration and managed requirements without reloading unrelated settings.
+    pub async fn refresh_mcp_config(&self, next_config: crate::config::Config) {
+        self.session.refresh_mcp_config(next_config).await;
     }
 
     pub async fn environment_selections(&self) -> Vec<TurnEnvironmentSelection> {
