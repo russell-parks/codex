@@ -1,5 +1,8 @@
 use std::path::Path;
+use std::path::PathBuf;
 
+use crate::AppServerTarget;
+use crate::Cli;
 use anyhow::Result;
 use anyhow::bail;
 use codex_config::types::WorktreeBaseRef;
@@ -7,6 +10,7 @@ use codex_git_utils::worktree::GitWorktreeBaseRef;
 use codex_git_utils::worktree::PreparedWorktree;
 use codex_git_utils::worktree::WorktreePrepareOptions;
 use codex_git_utils::worktree::prepare_worktree;
+use codex_utils_absolute_path::AbsolutePathBuf;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -60,6 +64,117 @@ pub(crate) fn prepare_launch_worktree(
     .map(Some)
 }
 
+pub(crate) fn validate_app_server_target(
+    cli_worktree: Option<&str>,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<()> {
+    if cli_worktree.is_none() {
+        return Ok(());
+    }
+
+    match app_server_target {
+        AppServerTarget::Embedded => Ok(()),
+        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
+            std::io::Error::other("--worktree is not supported when connected to an app server"),
+        ),
+    }
+}
+
+pub(crate) fn repo_hint_for_target<'a>(
+    cli_worktree: Option<&str>,
+    app_server_target: &AppServerTarget,
+    config_cwd: Option<&'a AbsolutePathBuf>,
+) -> std::io::Result<Option<&'a Path>> {
+    if cli_worktree.is_none() {
+        return Ok(None);
+    }
+
+    match app_server_target {
+        AppServerTarget::Embedded => config_cwd
+            .as_ref()
+            .map(|cwd| cwd.as_path())
+            .ok_or_else(|| std::io::Error::other("--worktree requires a local working directory")),
+        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
+            std::io::Error::other("--worktree is not supported when connected to an app server"),
+        ),
+    }
+    .map(Some)
+}
+
+pub(crate) fn final_cwd_override_for_launch(
+    uses_remote_workspace: bool,
+    cwd: Option<PathBuf>,
+    prepared_worktree: Option<&PreparedWorktree>,
+) -> Option<PathBuf> {
+    if uses_remote_workspace {
+        None
+    } else {
+        prepared_worktree
+            .map(|worktree| final_cwd_for_prepared_worktree(cwd.as_deref(), worktree))
+            .or(cwd)
+    }
+}
+
+fn final_cwd_for_prepared_worktree(
+    cwd: Option<&Path>,
+    prepared_worktree: &PreparedWorktree,
+) -> PathBuf {
+    let Some(cwd) = cwd else {
+        return prepared_worktree.path.clone();
+    };
+    let relative_cwd = cwd
+        .strip_prefix(prepared_worktree.source_root.as_path())
+        .unwrap_or_else(|_| Path::new(""));
+    if relative_cwd.as_os_str().is_empty() {
+        prepared_worktree.path.clone()
+    } else {
+        prepared_worktree.path.join(relative_cwd)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct WorktreeLaunchMode {
+    resume_picker: bool,
+    resume_last: bool,
+    resume_session_id: bool,
+    fork_picker: bool,
+    fork_last: bool,
+    fork_session_id: bool,
+}
+
+impl WorktreeLaunchMode {
+    pub(crate) fn from_cli(cli: &Cli) -> Self {
+        Self {
+            resume_picker: cli.resume_picker,
+            resume_last: cli.resume_last,
+            resume_session_id: cli.resume_session_id.is_some(),
+            fork_picker: cli.fork_picker,
+            fork_last: cli.fork_last,
+            fork_session_id: cli.fork_session_id.is_some(),
+        }
+    }
+
+    fn is_resume_or_fork(self) -> bool {
+        self.resume_picker
+            || self.resume_last
+            || self.resume_session_id
+            || self.fork_picker
+            || self.fork_last
+            || self.fork_session_id
+    }
+}
+
+pub(crate) fn validate_starts_new_session(
+    cli_worktree: Option<&str>,
+    launch_mode: WorktreeLaunchMode,
+) -> Result<(), &'static str> {
+    if cli_worktree.is_some() && launch_mode.is_resume_or_fork() {
+        Err("--worktree is only supported when starting a new interactive session")
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) fn git_base_ref_from_config(base_ref: WorktreeBaseRef) -> GitWorktreeBaseRef {
     match base_ref {
         WorktreeBaseRef::Fresh => GitWorktreeBaseRef::Fresh,
@@ -89,6 +204,7 @@ fn validate_user_worktree_name(name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RemoteAppServerEndpoint;
     use codex_config::types::WorktreeBaseRef;
     use codex_git_utils::worktree::GitWorktreeBaseRef;
     use pretty_assertions::assert_eq;
@@ -149,6 +265,196 @@ mod tests {
         assert_eq!(
             git_base_ref_from_config(WorktreeBaseRef::Head),
             GitWorktreeBaseRef::Head
+        );
+    }
+
+    #[test]
+    fn app_server_target_validation_rejects_local_daemon_before_cwd_resolution()
+    -> anyhow::Result<()> {
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err = validate_app_server_target(Some("task"), &target)
+            .expect_err("local daemon worktree launch should be rejected");
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn app_server_target_validation_rejects_remote_before_cwd_resolution() -> anyhow::Result<()> {
+        let target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err = validate_app_server_target(Some("task"), &target)
+            .expect_err("remote worktree launch should be rejected");
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn repo_hint_keeps_no_worktree_daemon_launches_unchanged() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let repo_hint = repo_hint_for_target(None, &target, Some(&cwd))?;
+
+        assert_eq!(repo_hint, None);
+        Ok(())
+    }
+
+    #[test]
+    fn repo_hint_allows_embedded_target() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+
+        let repo_hint = repo_hint_for_target(Some("task"), &AppServerTarget::Embedded, Some(&cwd))?;
+
+        assert_eq!(repo_hint, Some(cwd.as_path()));
+        Ok(())
+    }
+
+    #[test]
+    fn final_cwd_override_uses_prepared_worktree_path() {
+        let source_cwd = PathBuf::from("/repo");
+        let worktree_path = PathBuf::from("/repo/.codex/worktrees/task");
+        let prepared_worktree = PreparedWorktree {
+            source_root: source_cwd.clone(),
+            path: worktree_path.clone(),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            generated_name: false,
+        };
+
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(source_cwd),
+            Some(&prepared_worktree),
+        );
+
+        assert_eq!(cwd_override, Some(worktree_path));
+    }
+
+    #[test]
+    fn final_cwd_override_preserves_explicit_cwd_without_worktree() {
+        let explicit_cwd = PathBuf::from("/repo/subdir");
+
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(explicit_cwd.clone()),
+            /*prepared_worktree*/ None,
+        );
+
+        assert_eq!(cwd_override, Some(explicit_cwd));
+    }
+
+    #[test]
+    fn final_cwd_override_preserves_cwd_relative_to_source_repo_root() {
+        let source_root = PathBuf::from("/repo");
+        let source_subdir = source_root.join("subdir");
+        let worktree_path = source_root.join(".codex").join("worktrees").join("task");
+        let prepared_worktree = PreparedWorktree {
+            source_root,
+            path: worktree_path.clone(),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            generated_name: false,
+        };
+
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(source_subdir),
+            Some(&prepared_worktree),
+        );
+
+        assert_eq!(cwd_override, Some(worktree_path.join("subdir")));
+    }
+
+    #[test]
+    fn validation_rejects_resume_last() {
+        let err = validate_starts_new_session(
+            Some("task"),
+            WorktreeLaunchMode {
+                resume_last: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("resume --last with worktree should be rejected");
+
+        assert_eq!(
+            err,
+            "--worktree is only supported when starting a new interactive session"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_fork_last() {
+        let err = validate_starts_new_session(
+            Some("task"),
+            WorktreeLaunchMode {
+                fork_last: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("fork --last with worktree should be rejected");
+
+        assert_eq!(
+            err,
+            "--worktree is only supported when starting a new interactive session"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_picker_modes() {
+        for launch_mode in [
+            WorktreeLaunchMode {
+                resume_picker: true,
+                ..Default::default()
+            },
+            WorktreeLaunchMode {
+                fork_picker: true,
+                ..Default::default()
+            },
+        ] {
+            let err = validate_starts_new_session(Some("task"), launch_mode)
+                .expect_err("picker mode with worktree should be rejected");
+
+            assert_eq!(
+                err,
+                "--worktree is only supported when starting a new interactive session"
+            );
+        }
+    }
+
+    #[test]
+    fn validation_allows_new_session_and_no_worktree_resume_or_fork() {
+        assert_eq!(
+            validate_starts_new_session(Some("task"), WorktreeLaunchMode::default()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_starts_new_session(
+                None,
+                WorktreeLaunchMode {
+                    resume_last: true,
+                    ..Default::default()
+                },
+            ),
+            Ok(())
         );
     }
 }

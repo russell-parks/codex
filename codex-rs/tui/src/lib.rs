@@ -878,43 +878,6 @@ fn app_server_target_for_launch(
     }
 }
 
-fn local_worktree_repo_hint_for_target<'a>(
-    cli_worktree: Option<&str>,
-    app_server_target: &AppServerTarget,
-    config_cwd: Option<&'a AbsolutePathBuf>,
-) -> std::io::Result<Option<&'a Path>> {
-    if cli_worktree.is_none() {
-        return Ok(None);
-    }
-
-    match app_server_target {
-        AppServerTarget::Embedded => config_cwd
-            .as_ref()
-            .map(|cwd| cwd.as_path())
-            .ok_or_else(|| std::io::Error::other("--worktree requires a local working directory")),
-        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
-            std::io::Error::other("--worktree is not supported when connected to an app server"),
-        ),
-    }
-    .map(Some)
-}
-
-fn validate_worktree_app_server_target(
-    cli_worktree: Option<&str>,
-    app_server_target: &AppServerTarget,
-) -> std::io::Result<()> {
-    if cli_worktree.is_none() {
-        return Ok(());
-    }
-
-    match app_server_target {
-        AppServerTarget::Embedded => Ok(()),
-        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
-            std::io::Error::other("--worktree is not supported when connected to an app server"),
-        ),
-    }
-}
-
 fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
         && loader_overrides.user_config_profile.is_none()
@@ -961,63 +924,6 @@ fn can_reuse_implicit_local_daemon_for_launch(
     )
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct WorktreeLaunchMode {
-    resume_picker: bool,
-    resume_last: bool,
-    resume_session_id: bool,
-    fork_picker: bool,
-    fork_last: bool,
-    fork_session_id: bool,
-}
-
-impl WorktreeLaunchMode {
-    fn from_cli(cli: &Cli) -> Self {
-        Self {
-            resume_picker: cli.resume_picker,
-            resume_last: cli.resume_last,
-            resume_session_id: cli.resume_session_id.is_some(),
-            fork_picker: cli.fork_picker,
-            fork_last: cli.fork_last,
-            fork_session_id: cli.fork_session_id.is_some(),
-        }
-    }
-
-    fn is_resume_or_fork(self) -> bool {
-        self.resume_picker
-            || self.resume_last
-            || self.resume_session_id
-            || self.fork_picker
-            || self.fork_last
-            || self.fork_session_id
-    }
-}
-
-fn validate_worktree_starts_new_session(
-    cli_worktree: Option<&str>,
-    launch_mode: WorktreeLaunchMode,
-) -> Result<(), &'static str> {
-    if cli_worktree.is_some() && launch_mode.is_resume_or_fork() {
-        Err("--worktree is only supported when starting a new interactive session")
-    } else {
-        Ok(())
-    }
-}
-
-fn final_cwd_override_for_launch(
-    uses_remote_workspace: bool,
-    cwd: Option<PathBuf>,
-    prepared_worktree: Option<&codex_git_utils::worktree::PreparedWorktree>,
-) -> Option<PathBuf> {
-    if uses_remote_workspace {
-        None
-    } else {
-        prepared_worktree
-            .map(|worktree| worktree.path.clone())
-            .or(cwd)
-    }
-}
-
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1036,9 +942,9 @@ pub async fn run_main(
             cli.approval_policy.map(Into::into),
         )
     };
-    validate_worktree_starts_new_session(
+    worktree::validate_starts_new_session(
         cli.worktree.as_deref(),
-        WorktreeLaunchMode::from_cli(&cli),
+        worktree::WorktreeLaunchMode::from_cli(&cli),
     )
     .map_err(std::io::Error::other)?;
 
@@ -1097,7 +1003,7 @@ pub async fn run_main(
         default_daemon,
         reuse_implicit_local_daemon,
     );
-    validate_worktree_app_server_target(cli.worktree.as_deref(), &app_server_target)?;
+    worktree::validate_app_server_target(cli.worktree.as_deref(), &app_server_target)?;
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -1164,6 +1070,39 @@ pub async fn run_main(
     )
     .await;
 
+    let source_cwd = config_cwd
+        .as_ref()
+        .map(|config_cwd| config_cwd.as_path().to_path_buf());
+    let worktree_cleanup = if let Some(local_cwd) = worktree::repo_hint_for_target(
+        cli.worktree.as_deref(),
+        &app_server_target,
+        config_cwd.as_ref(),
+    )? {
+        let prepared_worktree = worktree::prepare_launch_worktree(
+            local_cwd,
+            cli.worktree.as_deref(),
+            bootstrap_config_toml.worktree.base_ref,
+        )
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .expect("worktree flag should produce a worktree request");
+        cwd = worktree::final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            source_cwd,
+            Some(&prepared_worktree),
+        );
+        cli.cwd = cwd.clone();
+        Some(prepared_worktree)
+    } else {
+        None
+    };
+    let final_config_cwd = if worktree_cleanup.is_some() {
+        cwd.as_ref()
+            .map(AbsolutePathBuf::from_absolute_path)
+            .transpose()?
+    } else {
+        config_cwd.clone()
+    };
+
     let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
         let bootstrap_config_with_cloud_config;
@@ -1173,7 +1112,7 @@ pub async fn run_main(
             // needs a default provider from config, reload with the bundle.
             bootstrap_config_with_cloud_config = load_bootstrap_config_or_exit(
                 &codex_home,
-                config_cwd.as_ref(),
+                final_config_cwd.as_ref(),
                 cli_kv_overrides.clone(),
                 loader_overrides.clone(),
                 strict_config,
@@ -1220,29 +1159,10 @@ pub async fn run_main(
         None // No model specified, will use the default.
     };
 
-    let worktree_cleanup = if let Some(local_cwd) = local_worktree_repo_hint_for_target(
-        cli.worktree.as_deref(),
-        &app_server_target,
-        config_cwd.as_ref(),
-    )? {
-        let prepared_worktree = worktree::prepare_launch_worktree(
-            local_cwd,
-            cli.worktree.as_deref(),
-            bootstrap_config_toml.worktree.base_ref,
-        )
-        .map_err(|err| std::io::Error::other(err.to_string()))?
-        .expect("worktree flag should produce a worktree request");
-        cwd = Some(prepared_worktree.path.clone());
-        cli.cwd = cwd.clone();
-        Some(prepared_worktree)
-    } else {
-        None
-    };
-
-    let cwd_override = final_cwd_override_for_launch(
+    let cwd_override = worktree::final_cwd_override_for_launch(
         app_server_target.uses_remote_workspace(),
         cwd.clone(),
-        worktree_cleanup.as_ref(),
+        /*prepared_worktree*/ None,
     );
 
     let additional_dirs = cli.add_dir.clone();
@@ -2768,139 +2688,6 @@ mod tests {
     }
 
     #[test]
-    fn worktree_launch_repo_hint_rejects_local_daemon() -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let err =
-            local_worktree_repo_hint_for_target(Some("task"), &target, Some(&cwd)).unwrap_err();
-
-        assert!(err.to_string().contains("not supported"));
-        Ok(())
-    }
-
-    #[test]
-    fn worktree_launch_repo_hint_rejects_remote_target() -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
-        let target = AppServerTarget::Remote {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let err =
-            local_worktree_repo_hint_for_target(Some("task"), &target, Some(&cwd)).unwrap_err();
-
-        assert!(err.to_string().contains("not supported"));
-        Ok(())
-    }
-
-    #[test]
-    fn worktree_app_server_target_validation_rejects_local_daemon_before_cwd_resolution()
-    -> color_eyre::Result<()> {
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let err = validate_worktree_app_server_target(Some("task"), &target)
-            .expect_err("local daemon worktree launch should be rejected");
-
-        assert!(err.to_string().contains("not supported"));
-        Ok(())
-    }
-
-    #[test]
-    fn worktree_app_server_target_validation_rejects_remote_before_cwd_resolution()
-    -> color_eyre::Result<()> {
-        let target = AppServerTarget::Remote {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let err = validate_worktree_app_server_target(Some("task"), &target)
-            .expect_err("remote worktree launch should be rejected");
-
-        assert!(err.to_string().contains("not supported"));
-        Ok(())
-    }
-
-    #[test]
-    fn worktree_launch_repo_hint_keeps_no_worktree_daemon_launches_unchanged()
-    -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
-        let target = AppServerTarget::LocalDaemon {
-            endpoint: RemoteAppServerEndpoint::UnixSocket {
-                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
-            },
-        };
-
-        let repo_hint = local_worktree_repo_hint_for_target(None, &target, Some(&cwd))?;
-
-        assert_eq!(repo_hint, None);
-        Ok(())
-    }
-
-    #[test]
-    fn worktree_launch_repo_hint_allows_embedded_target() -> color_eyre::Result<()> {
-        let temp_dir = TempDir::new()?;
-        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
-
-        let repo_hint = local_worktree_repo_hint_for_target(
-            Some("task"),
-            &AppServerTarget::Embedded,
-            Some(&cwd),
-        )?;
-
-        assert_eq!(repo_hint, Some(cwd.as_path()));
-        Ok(())
-    }
-
-    #[test]
-    fn final_cwd_override_uses_prepared_worktree_path() {
-        let source_cwd = PathBuf::from("/repo");
-        let worktree_path = PathBuf::from("/repo/.codex/worktrees/task");
-        let prepared_worktree = codex_git_utils::worktree::PreparedWorktree {
-            source_root: source_cwd.clone(),
-            path: worktree_path.clone(),
-            branch: "codex-worktree-task".to_string(),
-            base_ref: "HEAD".to_string(),
-            created: true,
-            generated_name: false,
-        };
-
-        let cwd_override = final_cwd_override_for_launch(
-            /*uses_remote_workspace*/ false,
-            Some(source_cwd),
-            Some(&prepared_worktree),
-        );
-
-        assert_eq!(cwd_override, Some(worktree_path));
-    }
-
-    #[test]
-    fn final_cwd_override_preserves_explicit_cwd_without_worktree() {
-        let explicit_cwd = PathBuf::from("/repo/subdir");
-
-        let cwd_override = final_cwd_override_for_launch(
-            /*uses_remote_workspace*/ false,
-            Some(explicit_cwd.clone()),
-            /*prepared_worktree*/ None,
-        );
-
-        assert_eq!(cwd_override, Some(explicit_cwd));
-    }
-
-    #[test]
     fn can_reuse_implicit_local_daemon_requires_default_launch_config() -> color_eyre::Result<()> {
         let mut loader_overrides = LoaderOverrides::default();
         let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
@@ -2953,80 +2740,6 @@ mod tests {
             /*bypass_hook_trust*/ false,
             Some("task"),
         ));
-    }
-
-    #[test]
-    fn worktree_validation_rejects_resume_last() {
-        let err = validate_worktree_starts_new_session(
-            Some("task"),
-            WorktreeLaunchMode {
-                resume_last: true,
-                ..Default::default()
-            },
-        )
-        .expect_err("resume --last with worktree should be rejected");
-
-        assert_eq!(
-            err,
-            "--worktree is only supported when starting a new interactive session"
-        );
-    }
-
-    #[test]
-    fn worktree_validation_rejects_fork_last() {
-        let err = validate_worktree_starts_new_session(
-            Some("task"),
-            WorktreeLaunchMode {
-                fork_last: true,
-                ..Default::default()
-            },
-        )
-        .expect_err("fork --last with worktree should be rejected");
-
-        assert_eq!(
-            err,
-            "--worktree is only supported when starting a new interactive session"
-        );
-    }
-
-    #[test]
-    fn worktree_validation_rejects_picker_modes() {
-        for launch_mode in [
-            WorktreeLaunchMode {
-                resume_picker: true,
-                ..Default::default()
-            },
-            WorktreeLaunchMode {
-                fork_picker: true,
-                ..Default::default()
-            },
-        ] {
-            let err = validate_worktree_starts_new_session(Some("task"), launch_mode)
-                .expect_err("picker mode with worktree should be rejected");
-
-            assert_eq!(
-                err,
-                "--worktree is only supported when starting a new interactive session"
-            );
-        }
-    }
-
-    #[test]
-    fn worktree_validation_allows_new_session_and_no_worktree_resume_or_fork() {
-        assert_eq!(
-            validate_worktree_starts_new_session(Some("task"), WorktreeLaunchMode::default()),
-            Ok(())
-        );
-        assert_eq!(
-            validate_worktree_starts_new_session(
-                None,
-                WorktreeLaunchMode {
-                    resume_last: true,
-                    ..Default::default()
-                },
-            ),
-            Ok(())
-        );
     }
 
     #[test]
