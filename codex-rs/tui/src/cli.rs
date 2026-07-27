@@ -65,6 +65,16 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Run the interactive session in a Codex-managed worktree.
+    #[arg(
+        long = "worktree",
+        short = 'w',
+        value_name = "NAME",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
+    pub worktree: Option<String>,
+
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode, preserving terminal scrollback history.

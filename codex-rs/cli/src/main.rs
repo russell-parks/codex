@@ -2810,6 +2810,46 @@ mod tests {
     }
 
     #[test]
+    fn interactive_worktree_flag_is_absent_by_default() {
+        let cli = MultitoolCli::try_parse_from(["codex"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_missing_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_missing_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "my-task"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree", "my-task"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+    }
+
+    #[test]
     fn profile_v2_rejects_non_plain_names_at_parse_time() {
         assert!(
             MultitoolCli::try_parse_from(["codex", "--profile", "nested/work", "resume"]).is_err()
