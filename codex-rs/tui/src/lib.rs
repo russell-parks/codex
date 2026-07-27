@@ -930,6 +930,21 @@ fn can_reuse_implicit_local_daemon(
         && !has_non_replayable_launch_overrides
 }
 
+fn can_reuse_implicit_local_daemon_for_launch(
+    cli_kv_overrides: &[(String, toml::Value)],
+    loader_overrides: &LoaderOverrides,
+    strict_config: bool,
+    bypass_hook_trust: bool,
+    cli_worktree: Option<&str>,
+) -> bool {
+    can_reuse_implicit_local_daemon(
+        cli_kv_overrides,
+        loader_overrides,
+        strict_config,
+        bypass_hook_trust || cli_worktree.is_some(),
+    )
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -987,11 +1002,12 @@ pub async fn run_main(
         launch_loader_overrides.user_config_path = Some(user_config_path);
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
-    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon(
+    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon_for_launch(
         &cli_kv_overrides,
         &launch_loader_overrides,
         strict_config,
         cli.bypass_hook_trust,
+        cli.worktree.as_deref(),
     );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         maybe_probe_default_daemon_socket(&codex_home).await
@@ -1069,31 +1085,6 @@ pub async fn run_main(
     )
     .await;
 
-    let worktree_cleanup = if let Some(local_cwd) = local_worktree_repo_hint_for_target(
-        cli.worktree.as_deref(),
-        &app_server_target,
-        config_cwd.as_ref(),
-    )? {
-        let prepared_worktree = worktree::prepare_launch_worktree(
-            local_cwd,
-            cli.worktree.as_deref(),
-            bootstrap_config_toml.worktree.base_ref,
-        )
-        .map_err(|err| std::io::Error::other(err.to_string()))?
-        .expect("worktree flag should produce a worktree request");
-        cwd = Some(prepared_worktree.path.clone());
-        cli.cwd = cwd.clone();
-        Some(prepared_worktree)
-    } else {
-        None
-    };
-
-    let cwd_override = if app_server_target.uses_remote_workspace() {
-        None
-    } else {
-        cwd.clone()
-    };
-
     let mut manually_selected_oss_provider = None;
     let model_provider_override = if cli.oss {
         let bootstrap_config_with_cloud_config;
@@ -1148,6 +1139,31 @@ pub async fn run_main(
             .map(std::borrow::ToOwned::to_owned)
     } else {
         None // No model specified, will use the default.
+    };
+
+    let worktree_cleanup = if let Some(local_cwd) = local_worktree_repo_hint_for_target(
+        cli.worktree.as_deref(),
+        &app_server_target,
+        config_cwd.as_ref(),
+    )? {
+        let prepared_worktree = worktree::prepare_launch_worktree(
+            local_cwd,
+            cli.worktree.as_deref(),
+            bootstrap_config_toml.worktree.base_ref,
+        )
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .expect("worktree flag should produce a worktree request");
+        cwd = Some(prepared_worktree.path.clone());
+        cli.cwd = cwd.clone();
+        Some(prepared_worktree)
+    } else {
+        None
+    };
+
+    let cwd_override = if app_server_target.uses_remote_workspace() {
+        None
+    } else {
+        cwd.clone()
     };
 
     let additional_dirs = cli.add_dir.clone();
@@ -2743,38 +2759,54 @@ mod tests {
         let mut loader_overrides = LoaderOverrides::default();
         let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
 
-        assert!(can_reuse_implicit_local_daemon(
+        assert!(can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &cli_kv_overrides,
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
         loader_overrides.ignore_user_config = true;
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &loader_overrides,
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ true,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ true,
+            /*bypass_hook_trust*/ true,
+            /*cli_worktree*/ None,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn can_reuse_implicit_local_daemon_rejects_worktree_launch() {
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+            /*bypass_hook_trust*/ false,
+            Some("task"),
+        ));
     }
 
     #[test]
