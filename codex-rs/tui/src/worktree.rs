@@ -1,6 +1,11 @@
+use std::collections::HashSet;
+use std::fs::File;
+use std::fs::OpenOptions;
+use std::io;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command;
 
 use crate::AppServerTarget;
 use crate::Cli;
@@ -214,29 +219,160 @@ fn copy_worktree_include_files(prepared_worktree: &PreparedWorktree) -> Result<(
         return Ok(());
     }
 
+    let Some(matcher) = worktree_include_matcher(prepared_worktree)? else {
+        return Ok(());
+    };
+    let source_filter =
+        WorktreeIncludeSourceFilter::from_git_status(&prepared_worktree.source_root)?;
+    copy_matching_worktree_include_entries(
+        &prepared_worktree.source_root,
+        &prepared_worktree.path,
+        Path::new(""),
+        &matcher,
+        &source_filter,
+    )
+}
+
+#[cfg(test)]
+fn copy_worktree_include_files_with_source_filter(
+    prepared_worktree: &PreparedWorktree,
+    source_filter: &WorktreeIncludeSourceFilter,
+) -> Result<()> {
+    if !prepared_worktree.created {
+        return Ok(());
+    }
+
+    let Some(matcher) = worktree_include_matcher(prepared_worktree)? else {
+        return Ok(());
+    };
+    copy_matching_worktree_include_entries(
+        &prepared_worktree.source_root,
+        &prepared_worktree.path,
+        Path::new(""),
+        &matcher,
+        source_filter,
+    )
+}
+
+fn worktree_include_matcher(
+    prepared_worktree: &PreparedWorktree,
+) -> Result<Option<WorktreeIncludeMatcher>> {
     let include_path = prepared_worktree.source_root.join(WORKTREE_INCLUDE_FILE);
     let contents = match std::fs::read_to_string(&include_path) {
         Ok(contents) => contents,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => {
             return Err(err).with_context(|| format!("failed to read {}", include_path.display()));
         }
     };
     let matcher = WorktreeIncludeMatcher::from_contents(&contents)?;
     if matcher.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
-    copy_matching_worktree_include_entries(
-        &prepared_worktree.source_root,
-        &prepared_worktree.path,
-        Path::new(""),
-        &matcher,
-    )
+    Ok(Some(matcher))
 }
 
 struct WorktreeIncludeMatcher {
     globset: GlobSet,
+}
+
+enum WorktreeIncludeSourceFilter {
+    #[cfg(test)]
+    AllowAll,
+    GitStatus {
+        files: HashSet<PathBuf>,
+        directory_prefixes: Vec<PathBuf>,
+    },
+}
+
+impl WorktreeIncludeSourceFilter {
+    fn from_git_status(source_root: &Path) -> Result<Self> {
+        let output = Command::new("git")
+            .args([
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--ignored=matching",
+                "--untracked-files=all",
+                "--",
+                ".",
+            ])
+            .current_dir(source_root)
+            .output()
+            .with_context(|| format!("failed to run git status in {}", source_root.display()))?;
+        if !output.status.success() {
+            bail!(
+                "failed to inspect ignored and untracked files in {}: {}",
+                source_root.display(),
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+
+        let mut files = HashSet::new();
+        let mut directory_prefixes = Vec::new();
+        for entry in output.stdout.split(|byte| *byte == 0) {
+            if !entry.starts_with(b"?? ") && !entry.starts_with(b"!! ") {
+                continue;
+            }
+
+            let mut path = &entry[3..];
+            let directory = path.ends_with(b"/");
+            if directory {
+                while path.ends_with(b"/") {
+                    path = &path[..path.len() - 1];
+                }
+            }
+            if path.is_empty() {
+                continue;
+            }
+
+            let relative_path = path_buf_from_git_status_path(path)?;
+            validate_worktree_include_relative_path(&relative_path)?;
+            if directory {
+                directory_prefixes.push(relative_path);
+            } else {
+                files.insert(relative_path);
+            }
+        }
+
+        Ok(Self::GitStatus {
+            files,
+            directory_prefixes,
+        })
+    }
+
+    fn allows_file(&self, relative_path: &Path) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::AllowAll => true,
+            Self::GitStatus {
+                files,
+                directory_prefixes,
+            } => {
+                files.contains(relative_path)
+                    || directory_prefixes
+                        .iter()
+                        .any(|prefix| relative_path.starts_with(prefix))
+            }
+        }
+    }
+
+    fn allows_directory(&self, relative_path: &Path) -> bool {
+        match self {
+            #[cfg(test)]
+            Self::AllowAll => true,
+            Self::GitStatus {
+                files,
+                directory_prefixes,
+            } => {
+                files.iter().any(|file| file.starts_with(relative_path))
+                    || directory_prefixes
+                        .iter()
+                        .any(|prefix| prefix == relative_path || prefix.starts_with(relative_path))
+            }
+        }
+    }
 }
 
 impl WorktreeIncludeMatcher {
@@ -271,10 +407,19 @@ impl WorktreeIncludeMatcher {
 }
 
 fn validate_worktree_include_pattern(pattern: &str, line_number: usize) -> Result<()> {
-    for component in Path::new(pattern).components() {
+    validate_worktree_include_relative_path(Path::new(pattern)).with_context(|| {
+        format!("unsafe .worktreeinclude pattern on line {line_number}: {pattern:?}")
+    })
+}
+
+fn validate_worktree_include_relative_path(path: &Path) -> Result<()> {
+    for component in path.components() {
         match component {
             Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
-                bail!("unsafe .worktreeinclude pattern on line {line_number}: {pattern:?}");
+                bail!(
+                    "path must stay within the worktree root: {}",
+                    path.display()
+                );
             }
             Component::CurDir | Component::Normal(_) => {}
         }
@@ -312,11 +457,25 @@ fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, line_number: usize) -> 
     Ok(())
 }
 
+#[cfg(unix)]
+fn path_buf_from_git_status_path(path: &[u8]) -> Result<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(path.to_vec())))
+}
+
+#[cfg(not(unix))]
+fn path_buf_from_git_status_path(path: &[u8]) -> Result<PathBuf> {
+    let path = std::str::from_utf8(path).context("git status output path was not UTF-8")?;
+    Ok(PathBuf::from(path))
+}
+
 fn copy_matching_worktree_include_entries(
     source_root: &Path,
     target_root: &Path,
     relative_dir: &Path,
     matcher: &WorktreeIncludeMatcher,
+    source_filter: &WorktreeIncludeSourceFilter,
 ) -> Result<()> {
     let source_dir = source_root.join(relative_dir);
     for entry in std::fs::read_dir(&source_dir)
@@ -340,7 +499,7 @@ fn copy_matching_worktree_include_entries(
         }
 
         if file_type.is_dir() {
-            if matcher.is_match(&relative_path) {
+            if matcher.is_match(&relative_path) && source_filter.allows_directory(&relative_path) {
                 create_worktree_include_target_dir(target_root, &relative_path)?;
             }
             copy_matching_worktree_include_entries(
@@ -348,8 +507,12 @@ fn copy_matching_worktree_include_entries(
                 target_root,
                 &relative_path,
                 matcher,
+                source_filter,
             )?;
-        } else if file_type.is_file() && matcher.is_match(&relative_path) {
+        } else if file_type.is_file()
+            && matcher.is_match(&relative_path)
+            && source_filter.allows_file(&relative_path)
+        {
             copy_worktree_include_file(source_root, target_root, &relative_path)?;
         }
     }
@@ -381,20 +544,29 @@ fn copy_worktree_include_file(
 ) -> Result<()> {
     let source_path = source_root.join(relative_path);
     let target_path = safe_worktree_include_target_path(target_root, relative_path)?;
-    match std::fs::symlink_metadata(&target_path) {
-        Ok(_) => return Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err)
-                .with_context(|| format!("failed to inspect {}", target_path.display()));
-        }
+    if let Some(parent) = relative_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        create_worktree_include_target_dir(target_root, parent)?;
     }
 
-    if let Some(parent) = target_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create directory {}", parent.display()))?;
-    }
-    std::fs::copy(&source_path, &target_path).with_context(|| {
+    let mut source = File::open(&source_path)
+        .with_context(|| format!("failed to open {}", source_path.display()))?;
+    let mut target = match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&target_path)
+    {
+        Ok(target) => target,
+        Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
+            safe_worktree_include_target_path(target_root, relative_path)?;
+            return Ok(());
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to create {}", target_path.display()));
+        }
+    };
+    io::copy(&mut source, &mut target).with_context(|| {
         format!(
             "failed to copy {} to {}",
             source_path.display(),
@@ -405,8 +577,36 @@ fn copy_worktree_include_file(
 }
 
 fn safe_worktree_include_target_path(target_root: &Path, relative_path: &Path) -> Result<PathBuf> {
+    validate_worktree_include_relative_path(relative_path).with_context(|| {
+        format!(
+            "unsafe .worktreeinclude target path under {}: {}",
+            target_root.display(),
+            relative_path.display()
+        )
+    })?;
+
+    let mut current_path = target_root.to_path_buf();
     for component in relative_path.components() {
         match component {
+            Component::CurDir => {}
+            Component::Normal(name) => {
+                current_path.push(name);
+                match std::fs::symlink_metadata(&current_path) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => {
+                        bail!(
+                            "refusing to copy .worktreeinclude entry through symlink target path {}",
+                            current_path.display()
+                        );
+                    }
+                    Ok(_) => {}
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => break,
+                    Err(err) => {
+                        return Err(err).with_context(|| {
+                            format!("failed to inspect {}", current_path.display())
+                        });
+                    }
+                }
+            }
             Component::Prefix(_) | Component::RootDir | Component::ParentDir => {
                 bail!(
                     "unsafe .worktreeinclude target path under {}: {}",
@@ -414,7 +614,6 @@ fn safe_worktree_include_target_path(target_root: &Path, relative_path: &Path) -
                     relative_path.display()
                 );
             }
-            Component::CurDir | Component::Normal(_) => {}
         }
     }
 
@@ -448,6 +647,7 @@ mod tests {
     use codex_git_utils::worktree::GitWorktreeBaseRef;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::process::Command;
     use uuid::Uuid;
 
     #[test]
@@ -706,7 +906,7 @@ mod tests {
         fs::create_dir_all(&source_root)?;
         fs::create_dir_all(&target_root)?;
 
-        copy_worktree_include_files(&prepared_worktree(
+        copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -732,7 +932,7 @@ mod tests {
         fs::write(source_root.join("config").join("dev.local"), "dev")?;
         fs::write(source_root.join("config").join("dev.toml"), "tracked")?;
 
-        copy_worktree_include_files(&prepared_worktree(
+        copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -765,7 +965,7 @@ mod tests {
             "rust skill",
         )?;
 
-        copy_worktree_include_files(&prepared_worktree(
+        copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -797,7 +997,7 @@ mod tests {
         )?;
         fs::write(source_root.join(".env"), "secret")?;
 
-        copy_worktree_include_files(&prepared_worktree(
+        copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -836,7 +1036,7 @@ mod tests {
             "state",
         )?;
 
-        copy_worktree_include_files(&prepared_worktree(
+        copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -876,7 +1076,7 @@ mod tests {
         fs::create_dir_all(&target_root)?;
         fs::write(source_root.join(".worktreeinclude"), "../outside\n")?;
 
-        let err = copy_worktree_include_files(&prepared_worktree(
+        let err = copy_worktree_include_files_allow_all(&prepared_worktree(
             &source_root,
             &target_root,
             /*created*/ true,
@@ -884,6 +1084,78 @@ mod tests {
         .expect_err("traversal pattern should be rejected");
 
         assert!(err.to_string().contains("unsafe .worktreeinclude pattern"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worktreeinclude_rejects_existing_target_symlink_ancestors() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        let outside_root = temp_dir.path().join("outside");
+        fs::create_dir_all(source_root.join(".codex").join("skills").join("rust"))?;
+        fs::create_dir_all(&target_root)?;
+        fs::create_dir_all(&outside_root)?;
+        std::os::unix::fs::symlink(&outside_root, target_root.join(".codex"))?;
+        fs::write(source_root.join(".worktreeinclude"), ".codex/skills/\n")?;
+        fs::write(
+            source_root
+                .join(".codex")
+                .join("skills")
+                .join("rust")
+                .join("SKILL.md"),
+            "rust skill",
+        )?;
+
+        let err = copy_worktree_include_files_allow_all(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))
+        .expect_err("target symlink ancestor should be rejected");
+
+        assert!(err.to_string().contains("refusing to copy"));
+        assert!(!outside_root.join("skills").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn worktreeinclude_copies_only_untracked_or_ignored_source_files() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        fs::create_dir_all(&source_root)?;
+        fs::create_dir_all(&target_root)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join(".gitignore"), "ignored.secret\n")?;
+        fs::write(
+            source_root.join(".worktreeinclude"),
+            "*.txt\nignored.secret\n",
+        )?;
+        fs::write(source_root.join("tracked.txt"), "tracked")?;
+        fs::write(source_root.join("untracked.txt"), "untracked")?;
+        fs::write(source_root.join("ignored.secret"), "ignored")?;
+        run_git(&source_root, ["add", ".gitignore", "tracked.txt"])?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+
+        copy_worktree_include_files(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))?;
+
+        assert!(!target_root.join("tracked.txt").exists());
+        assert_eq!(
+            fs::read_to_string(target_root.join("untracked.txt"))?,
+            "untracked"
+        );
+        assert_eq!(
+            fs::read_to_string(target_root.join("ignored.secret"))?,
+            "ignored"
+        );
         Ok(())
     }
 
@@ -900,5 +1172,29 @@ mod tests {
             created,
             generated_name: false,
         }
+    }
+
+    fn copy_worktree_include_files_allow_all(
+        prepared_worktree: &PreparedWorktree,
+    ) -> anyhow::Result<()> {
+        copy_worktree_include_files_with_source_filter(
+            prepared_worktree,
+            &WorktreeIncludeSourceFilter::AllowAll,
+        )
+    }
+
+    fn run_git<I, S>(cwd: &Path, args: I) -> anyhow::Result<()>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        let output = Command::new("git").args(args).current_dir(cwd).output()?;
+        if !output.status.success() {
+            bail!(
+                "git command failed: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
+        Ok(())
     }
 }
