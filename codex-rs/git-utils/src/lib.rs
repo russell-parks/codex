@@ -6,6 +6,7 @@ mod fsmonitor;
 mod info;
 mod operations;
 mod platform;
+pub mod worktree;
 
 pub use apply::ApplyGitRequest;
 pub use apply::ApplyGitResult;
