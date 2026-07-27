@@ -945,6 +945,49 @@ fn can_reuse_implicit_local_daemon_for_launch(
     )
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct WorktreeLaunchMode {
+    resume_picker: bool,
+    resume_last: bool,
+    resume_session_id: bool,
+    fork_picker: bool,
+    fork_last: bool,
+    fork_session_id: bool,
+}
+
+impl WorktreeLaunchMode {
+    fn from_cli(cli: &Cli) -> Self {
+        Self {
+            resume_picker: cli.resume_picker,
+            resume_last: cli.resume_last,
+            resume_session_id: cli.resume_session_id.is_some(),
+            fork_picker: cli.fork_picker,
+            fork_last: cli.fork_last,
+            fork_session_id: cli.fork_session_id.is_some(),
+        }
+    }
+
+    fn is_resume_or_fork(self) -> bool {
+        self.resume_picker
+            || self.resume_last
+            || self.resume_session_id
+            || self.fork_picker
+            || self.fork_last
+            || self.fork_session_id
+    }
+}
+
+fn validate_worktree_starts_new_session(
+    cli_worktree: Option<&str>,
+    launch_mode: WorktreeLaunchMode,
+) -> Result<(), &'static str> {
+    if cli_worktree.is_some() && launch_mode.is_resume_or_fork() {
+        Err("--worktree is only supported when starting a new interactive session")
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -963,6 +1006,11 @@ pub async fn run_main(
             cli.approval_policy.map(Into::into),
         )
     };
+    validate_worktree_starts_new_session(
+        cli.worktree.as_deref(),
+        WorktreeLaunchMode::from_cli(&cli),
+    )
+    .map_err(std::io::Error::other)?;
 
     // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
@@ -2807,6 +2855,80 @@ mod tests {
             /*bypass_hook_trust*/ false,
             Some("task"),
         ));
+    }
+
+    #[test]
+    fn worktree_validation_rejects_resume_last() {
+        let err = validate_worktree_starts_new_session(
+            Some("task"),
+            WorktreeLaunchMode {
+                resume_last: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("resume --last with worktree should be rejected");
+
+        assert_eq!(
+            err,
+            "--worktree is only supported when starting a new interactive session"
+        );
+    }
+
+    #[test]
+    fn worktree_validation_rejects_fork_last() {
+        let err = validate_worktree_starts_new_session(
+            Some("task"),
+            WorktreeLaunchMode {
+                fork_last: true,
+                ..Default::default()
+            },
+        )
+        .expect_err("fork --last with worktree should be rejected");
+
+        assert_eq!(
+            err,
+            "--worktree is only supported when starting a new interactive session"
+        );
+    }
+
+    #[test]
+    fn worktree_validation_rejects_picker_modes() {
+        for launch_mode in [
+            WorktreeLaunchMode {
+                resume_picker: true,
+                ..Default::default()
+            },
+            WorktreeLaunchMode {
+                fork_picker: true,
+                ..Default::default()
+            },
+        ] {
+            let err = validate_worktree_starts_new_session(Some("task"), launch_mode)
+                .expect_err("picker mode with worktree should be rejected");
+
+            assert_eq!(
+                err,
+                "--worktree is only supported when starting a new interactive session"
+            );
+        }
+    }
+
+    #[test]
+    fn worktree_validation_allows_new_session_and_no_worktree_resume_or_fork() {
+        assert_eq!(
+            validate_worktree_starts_new_session(Some("task"), WorktreeLaunchMode::default()),
+            Ok(())
+        );
+        assert_eq!(
+            validate_worktree_starts_new_session(
+                None,
+                WorktreeLaunchMode {
+                    resume_last: true,
+                    ..Default::default()
+                },
+            ),
+            Ok(())
+        );
     }
 
     #[test]
