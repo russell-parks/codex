@@ -2529,6 +2529,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         strict_config,
         approval_policy,
         web_search,
+        worktree,
         prompt,
         config_overrides,
         ..
@@ -2544,6 +2545,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if strict_config {
         interactive.strict_config = true;
+    }
+    if let Some(worktree) = worktree {
+        interactive.worktree = Some(worktree);
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -2839,6 +2843,7 @@ mod tests {
 
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt, None);
     }
 
     #[test]
@@ -2847,6 +2852,54 @@ mod tests {
 
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_treats_following_token_as_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("PROMPT"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_treats_following_token_as_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("PROMPT"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_prompt_after_option_terminator() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "--", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_prompt_after_option_terminator() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--worktree", "--", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
+    }
+
+    #[test]
+    fn interactive_worktree_long_equals_keeps_following_token_as_prompt() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--worktree=my-task", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
     }
 
     #[test]
@@ -3546,6 +3599,17 @@ mod tests {
     }
 
     #[test]
+    fn resume_merges_worktree_flag() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--worktree", "resume-task"].as_ref());
+
+        assert_eq!(interactive.worktree.as_deref(), Some("resume-task"));
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
     fn fork_picker_logic_none_and_not_last() {
         let interactive = finalize_fork_from_args(["codex", "fork"].as_ref());
         assert!(interactive.fork_picker);
@@ -3611,6 +3675,17 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_merges_worktree_flag() {
+        let interactive =
+            finalize_fork_from_args(["codex", "fork", "--worktree", "fork-task"].as_ref());
+
+        assert_eq!(interactive.worktree.as_deref(), Some("fork-task"));
+        assert!(interactive.fork_picker);
+        assert!(!interactive.fork_last);
+        assert_eq!(interactive.fork_session_id, None);
     }
 
     #[test]
