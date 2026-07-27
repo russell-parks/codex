@@ -3329,6 +3329,7 @@ mod tests {
             thread_id,
             resume_hint: codex_utils_cli::resume_hint(thread_name, thread_id),
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::UserRequested,
         }
     }
@@ -3340,6 +3341,7 @@ mod tests {
             thread_id: None,
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
@@ -3353,6 +3355,7 @@ mod tests {
             thread_id: Some(ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap()),
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::Fatal("boom".to_string()),
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);

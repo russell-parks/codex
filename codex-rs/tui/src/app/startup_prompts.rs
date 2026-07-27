@@ -347,6 +347,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
                     thread_id: None,
                     resume_hint: None,
                     update_action: None,
+                    worktree_cleanup: None,
                     exit_reason: ExitReason::UserRequested,
                 });
             }

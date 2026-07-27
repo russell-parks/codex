@@ -206,6 +206,7 @@ mod width;
 mod windows_sandbox;
 mod workspace_command;
 mod workspace_messages;
+mod worktree;
 
 mod wrapping;
 
@@ -997,7 +998,7 @@ pub async fn run_main(
             EnvironmentManager::prepare_from_env().await
         }
         .map_err(std::io::Error::other)?;
-    let cwd = cli.cwd.clone();
+    let mut cwd = cli.cwd.clone();
     let config_cwd = config_cwd_for_app_server_target(
         cwd.as_deref(),
         &app_server_target,
@@ -1046,6 +1047,26 @@ pub async fn run_main(
         auth_route_config,
     )
     .await;
+
+    let worktree_cleanup = if cli.worktree.is_some() {
+        let Some(local_cwd) = config_cwd.as_ref() else {
+            return Err(std::io::Error::other(
+                "--worktree is not supported for remote sessions",
+            ));
+        };
+        let prepared_worktree = worktree::prepare_launch_worktree(
+            local_cwd.as_path(),
+            cli.worktree.as_deref(),
+            bootstrap_config_toml.worktree.base_ref,
+        )
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .expect("worktree flag should produce a worktree request");
+        cwd = Some(prepared_worktree.path.clone());
+        cli.cwd = cwd.clone();
+        Some(prepared_worktree)
+    } else {
+        None
+    };
 
     let cwd_override = if app_server_target.uses_remote_workspace() {
         None
@@ -1315,6 +1336,7 @@ pub async fn run_main(
         log_db,
         state_db,
         environment_manager,
+        worktree_cleanup,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -1337,6 +1359,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
@@ -1377,6 +1400,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         resume_hint: None,
                         update_action: Some(action),
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1470,6 +1494,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1522,6 +1547,7 @@ async fn run_ratatui_app(
             thread_id: None,
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: worktree_cleanup.clone(),
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
             )),
@@ -1579,6 +1605,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         resume_hint: None,
                         update_action: None,
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1640,6 +1667,7 @@ async fn run_ratatui_app(
                     thread_id: None,
                     resume_hint: None,
                     update_action: None,
+                    worktree_cleanup: worktree_cleanup.clone(),
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1670,6 +1698,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1828,6 +1857,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        worktree_cleanup,
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,

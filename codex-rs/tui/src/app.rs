@@ -143,6 +143,7 @@ use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_git_utils::worktree::PreparedWorktree;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -405,6 +406,7 @@ pub struct AppExitInfo {
     pub thread_id: Option<ThreadId>,
     pub resume_hint: Option<String>,
     pub update_action: Option<UpdateAction>,
+    pub worktree_cleanup: Option<PreparedWorktree>,
     pub exit_reason: ExitReason,
 }
 
@@ -415,6 +417,7 @@ impl AppExitInfo {
             thread_id: None,
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }
@@ -781,6 +784,7 @@ impl App {
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        worktree_cleanup: Option<PreparedWorktree>,
         startup_elapsed_before_app: Duration,
         startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
@@ -1275,6 +1279,7 @@ See the Codex keymap documentation for supported actions and examples."
             thread_id,
             resume_hint,
             update_action: app.pending_update_action,
+            worktree_cleanup,
             exit_reason,
         })
     }
