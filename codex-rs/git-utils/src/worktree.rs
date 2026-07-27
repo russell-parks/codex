@@ -69,40 +69,51 @@ pub fn prepare_worktree(
         .join("worktrees")
         .join(&options.name);
     let branch = format!("codex-worktree-{}", options.name);
+    validate_branch_name(source_root.as_path(), &branch, &options.name)?;
     let base_ref = resolve_base_ref(source_root.as_path(), options.base_ref)?;
 
     if path.try_exists()? {
-        if is_git_worktree_root(path.as_path())? {
-            return Ok(PreparedWorktree {
-                source_root,
-                path,
-                branch,
-                base_ref,
-                created: false,
-                generated_name: options.generated_name,
-            });
-        }
-
-        bail!("worktree path {path:?} already exists but is not a git worktree");
+        validate_existing_worktree(source_root.as_path(), path.as_path(), &branch)?;
+        return Ok(PreparedWorktree {
+            source_root,
+            path,
+            branch,
+            base_ref,
+            created: false,
+            generated_name: options.generated_name,
+        });
     }
 
     let worktrees_root = source_root.join(".codex").join("worktrees");
     std::fs::create_dir_all(worktrees_root.as_path())
         .with_context(|| format!("failed to create codex worktree directory {worktrees_root:?}"))?;
 
-    run_git_for_status(
-        source_root.as_path(),
-        [
+    let args = if local_branch_exists(source_root.as_path(), &branch)? {
+        if let Some(checked_out_path) = branch_checked_out_path(source_root.as_path(), &branch)? {
+            bail!(
+                "git worktree branch {branch:?} is already checked out at {checked_out_path:?}; run `git worktree prune` or remove that worktree before recreating"
+            );
+        }
+
+        vec![
+            OsString::from("worktree"),
+            OsString::from("add"),
+            path.as_os_str().to_os_string(),
+            OsString::from(&branch),
+        ]
+    } else {
+        vec![
             OsString::from("worktree"),
             OsString::from("add"),
             OsString::from("-b"),
             OsString::from(&branch),
             path.as_os_str().to_os_string(),
             OsString::from(&base_ref),
-        ],
-        /*env*/ None,
-    )
-    .with_context(|| format!("failed to create git worktree at {path:?}"))?;
+        ]
+    };
+
+    run_git_for_status(source_root.as_path(), args, /*env*/ None)
+        .with_context(|| format!("failed to create git worktree at {path:?}"))?;
 
     Ok(PreparedWorktree {
         source_root,
@@ -164,17 +175,145 @@ fn git_ref_exists(source_root: &Path, ref_name: &str) -> Result<bool> {
     }
 }
 
-fn is_git_worktree_root(path: &Path) -> Result<bool> {
+fn validate_branch_name(source_root: &Path, branch: &str, name: &str) -> Result<()> {
+    match run_git_for_status(
+        source_root,
+        [
+            OsString::from("check-ref-format"),
+            OsString::from("--branch"),
+            OsString::from(branch),
+        ],
+        /*env*/ None,
+    ) {
+        Ok(()) => Ok(()),
+        Err(GitToolingError::GitCommand { .. }) => {
+            bail!("unsafe git worktree branch {branch:?} derived from name {name:?}")
+        }
+        Err(err) => Err(err).with_context(|| format!("failed to validate git branch {branch:?}")),
+    }
+}
+
+fn validate_existing_worktree(
+    source_root: &Path,
+    path: &Path,
+    expected_branch: &str,
+) -> Result<()> {
     if !path.is_dir() {
-        return Ok(false);
+        bail!("worktree path {path:?} already exists but is not a git worktree");
     }
 
     match resolve_repository_root(path) {
-        Ok(root) => paths_equal(root.as_path(), path),
+        Ok(root) => {
+            if !paths_equal(root.as_path(), path)? {
+                bail!("worktree path {path:?} already exists but is not a git worktree root");
+            }
+        }
         Err(GitToolingError::GitCommand { .. })
-        | Err(GitToolingError::NotAGitRepository { .. }) => Ok(false),
-        Err(err) => Err(err).with_context(|| format!("failed to inspect git worktree {path:?}")),
+        | Err(GitToolingError::NotAGitRepository { .. }) => {
+            bail!("worktree path {path:?} already exists but is not a git worktree")
+        }
+        Err(err) => {
+            return Err(err).with_context(|| format!("failed to inspect git worktree {path:?}"));
+        }
     }
+
+    let source_common_dir = canonical_git_common_dir(source_root).with_context(|| {
+        format!("failed to inspect source repository common git dir at {source_root:?}")
+    })?;
+    let path_common_dir = canonical_git_common_dir(path)
+        .with_context(|| format!("failed to inspect worktree common git dir at {path:?}"))?;
+    if source_common_dir != path_common_dir {
+        bail!("worktree path {path:?} is not part of source repository {source_root:?}");
+    }
+
+    let branch = current_branch(path)
+        .with_context(|| format!("failed to inspect branch for existing worktree {path:?}"))?;
+    if branch != expected_branch {
+        bail!(
+            "worktree path {path:?} is on branch {branch:?}; expected branch {expected_branch:?}"
+        );
+    }
+
+    Ok(())
+}
+
+fn canonical_git_common_dir(path: &Path) -> Result<PathBuf> {
+    let common_dir = run_git_for_stdout(
+        path,
+        [
+            OsString::from("rev-parse"),
+            OsString::from("--git-common-dir"),
+        ],
+        /*env*/ None,
+    )?;
+    let common_dir = PathBuf::from(common_dir);
+    let common_dir = if common_dir.is_absolute() {
+        common_dir
+    } else {
+        path.join(common_dir)
+    };
+    common_dir
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize git common dir {common_dir:?}"))
+}
+
+fn current_branch(path: &Path) -> Result<String> {
+    run_git_for_stdout(
+        path,
+        [
+            OsString::from("symbolic-ref"),
+            OsString::from("--quiet"),
+            OsString::from("--short"),
+            OsString::from("HEAD"),
+        ],
+        /*env*/ None,
+    )
+    .map_err(anyhow::Error::from)
+}
+
+fn local_branch_exists(source_root: &Path, branch: &str) -> Result<bool> {
+    match run_git_for_status(
+        source_root,
+        [
+            OsString::from("show-ref"),
+            OsString::from("--verify"),
+            OsString::from("--quiet"),
+            OsString::from(format!("refs/heads/{branch}")),
+        ],
+        /*env*/ None,
+    ) {
+        Ok(()) => Ok(true),
+        Err(GitToolingError::GitCommand { .. }) => Ok(false),
+        Err(err) => Err(err).with_context(|| format!("failed to inspect git branch {branch:?}")),
+    }
+}
+
+fn branch_checked_out_path(source_root: &Path, branch: &str) -> Result<Option<PathBuf>> {
+    let expected_ref = format!("refs/heads/{branch}");
+    let expected_branch_line = format!("branch {expected_ref}");
+    let worktrees = run_git_for_stdout(
+        source_root,
+        [
+            OsString::from("worktree"),
+            OsString::from("list"),
+            OsString::from("--porcelain"),
+        ],
+        /*env*/ None,
+    )
+    .context("failed to list git worktrees")?;
+
+    let mut current_path: Option<PathBuf> = None;
+    for line in worktrees.lines() {
+        if let Some(path) = line.strip_prefix("worktree ") {
+            current_path = Some(PathBuf::from(path));
+        } else if line == expected_branch_line {
+            return Ok(current_path);
+        } else if line.is_empty() {
+            current_path = None;
+        }
+    }
+
+    Ok(None)
 }
 
 fn paths_equal(left: &Path, right: &Path) -> Result<bool> {

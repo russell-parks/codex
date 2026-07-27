@@ -63,6 +63,63 @@ fn reuses_existing_git_worktree() -> anyhow::Result<()> {
 }
 
 #[test]
+fn rejects_existing_path_that_is_unrelated_git_repo() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let target = repo.path().join(".codex").join("worktrees").join("reuse");
+    std::fs::create_dir_all(target.as_path())?;
+    git_status(target.as_path(), ["init", "-b", "main"])?;
+
+    let err = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "reuse".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )
+    .expect_err("unrelated nested repo should not be reused");
+
+    assert!(err.to_string().contains("not part of source repository"));
+
+    Ok(())
+}
+
+#[test]
+fn rejects_existing_worktree_on_unexpected_branch() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let target = repo
+        .path()
+        .join(".codex")
+        .join("worktrees")
+        .join("wrong-branch");
+    git_status_os(
+        repo.path(),
+        vec![
+            "worktree".into(),
+            "add".into(),
+            "-b".into(),
+            "other-branch".into(),
+            target.as_os_str().to_os_string(),
+            "HEAD".into(),
+        ],
+    )?;
+
+    let err = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "wrong-branch".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )
+    .expect_err("worktree on another branch should not be reused");
+
+    assert!(err.to_string().contains("expected branch"));
+
+    Ok(())
+}
+
+#[test]
 fn rejects_unsafe_worktree_name() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
 
@@ -78,6 +135,125 @@ fn rejects_unsafe_worktree_name() -> anyhow::Result<()> {
 
     assert!(err.to_string().contains("unsafe git worktree name"));
     assert!(!repo.path().join(".codex").join("worktrees").exists());
+
+    Ok(())
+}
+
+#[test]
+fn rejects_name_that_cannot_be_used_as_branch_ref() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+
+    let err = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "bad name".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )
+    .expect_err("invalid branch ref should be rejected before creation");
+
+    assert!(err.to_string().contains("unsafe git worktree branch"));
+    assert!(!repo.path().join(".codex").join("worktrees").exists());
+
+    Ok(())
+}
+
+#[test]
+fn fresh_uses_origin_head_when_available() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let remote = tempfile::tempdir()?;
+    git_status(remote.path(), ["init", "--bare", "-b", "main"])?;
+    git_status_os(
+        repo.path(),
+        vec![
+            "remote".into(),
+            "add".into(),
+            "origin".into(),
+            remote.path().as_os_str().to_os_string(),
+        ],
+    )?;
+    git_status(repo.path(), ["push", "-u", "origin", "main"])?;
+    git_status(repo.path(), ["fetch", "origin"])?;
+    git_status(
+        repo.path(),
+        [
+            "symbolic-ref",
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/main",
+        ],
+    )?;
+    git_status(repo.path(), ["checkout", "-b", "feature"])?;
+    std::fs::write(repo.path().join("file.txt"), "feature\n")?;
+    git_status(repo.path(), ["commit", "-am", "feature"])?;
+
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "fresh".to_string(),
+            base_ref: GitWorktreeBaseRef::Fresh,
+            generated_name: false,
+        },
+    )?;
+
+    assert_eq!(prepared.base_ref, "origin/HEAD");
+    assert_eq!(
+        git_stdout(prepared.path.as_path(), ["rev-parse", "HEAD"])?,
+        git_stdout(repo.path(), ["rev-parse", "origin/HEAD"])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn fresh_falls_back_to_head_without_origin_head() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "fresh-fallback".to_string(),
+            base_ref: GitWorktreeBaseRef::Fresh,
+            generated_name: false,
+        },
+    )?;
+
+    assert_eq!(prepared.base_ref, "HEAD");
+    assert_eq!(
+        git_stdout(prepared.path.as_path(), ["rev-parse", "HEAD"])?,
+        git_stdout(repo.path(), ["rev-parse", "HEAD"])?
+    );
+
+    Ok(())
+}
+
+#[test]
+fn recreates_missing_worktree_from_existing_unused_branch() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let options = WorktreePrepareOptions {
+        name: "recreate".to_string(),
+        base_ref: GitWorktreeBaseRef::Head,
+        generated_name: false,
+    };
+    let first = prepare_worktree(repo.path(), options.clone())?;
+    git_status_os(
+        repo.path(),
+        vec![
+            "worktree".into(),
+            "remove".into(),
+            "--force".into(),
+            first.path.as_os_str().to_os_string(),
+        ],
+    )?;
+
+    let recreated = prepare_worktree(repo.path(), options)?;
+
+    assert_eq!(recreated.created, true);
+    assert_eq!(recreated.branch, "codex-worktree-recreate");
+    assert_eq!(
+        git_stdout(recreated.path.as_path(), ["branch", "--show-current"])?,
+        "codex-worktree-recreate"
+    );
 
     Ok(())
 }
@@ -160,6 +336,10 @@ where
         );
     }
     Ok(())
+}
+
+fn git_status_os(cwd: &Path, args: Vec<std::ffi::OsString>) -> anyhow::Result<()> {
+    git_status(cwd, args)
 }
 
 fn git_stdout<I, S>(cwd: &Path, args: I) -> anyhow::Result<String>
