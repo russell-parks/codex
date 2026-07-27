@@ -878,6 +878,27 @@ fn app_server_target_for_launch(
     }
 }
 
+fn local_worktree_repo_hint_for_target<'a>(
+    cli_worktree: Option<&str>,
+    app_server_target: &AppServerTarget,
+    config_cwd: Option<&'a AbsolutePathBuf>,
+) -> std::io::Result<Option<&'a Path>> {
+    if cli_worktree.is_none() {
+        return Ok(None);
+    }
+
+    match app_server_target {
+        AppServerTarget::Embedded => config_cwd
+            .as_ref()
+            .map(|cwd| cwd.as_path())
+            .ok_or_else(|| std::io::Error::other("--worktree requires a local working directory")),
+        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
+            std::io::Error::other("--worktree is not supported when connected to an app server"),
+        ),
+    }
+    .map(Some)
+}
+
 fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
         && loader_overrides.user_config_profile.is_none()
@@ -1048,14 +1069,13 @@ pub async fn run_main(
     )
     .await;
 
-    let worktree_cleanup = if cli.worktree.is_some() {
-        let Some(local_cwd) = config_cwd.as_ref() else {
-            return Err(std::io::Error::other(
-                "--worktree is not supported for remote sessions",
-            ));
-        };
+    let worktree_cleanup = if let Some(local_cwd) = local_worktree_repo_hint_for_target(
+        cli.worktree.as_deref(),
+        &app_server_target,
+        config_cwd.as_ref(),
+    )? {
         let prepared_worktree = worktree::prepare_launch_worktree(
-            local_cwd.as_path(),
+            local_cwd,
             cli.worktree.as_deref(),
             bootstrap_config_toml.worktree.base_ref,
         )
@@ -2649,6 +2669,72 @@ mod tests {
         );
 
         assert_eq!(target, AppServerTarget::Embedded);
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_launch_repo_hint_rejects_local_daemon() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err =
+            local_worktree_repo_hint_for_target(Some("task"), &target, Some(&cwd)).unwrap_err();
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_launch_repo_hint_rejects_remote_target() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err =
+            local_worktree_repo_hint_for_target(Some("task"), &target, Some(&cwd)).unwrap_err();
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_launch_repo_hint_keeps_no_worktree_daemon_launches_unchanged()
+    -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let repo_hint = local_worktree_repo_hint_for_target(None, &target, Some(&cwd))?;
+
+        assert_eq!(repo_hint, None);
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_launch_repo_hint_allows_embedded_target() -> color_eyre::Result<()> {
+        let temp_dir = TempDir::new()?;
+        let cwd = AbsolutePathBuf::from_absolute_path(temp_dir.path())?;
+
+        let repo_hint = local_worktree_repo_hint_for_target(
+            Some("task"),
+            &AppServerTarget::Embedded,
+            Some(&cwd),
+        )?;
+
+        assert_eq!(repo_hint, Some(cwd.as_path()));
         Ok(())
     }
 

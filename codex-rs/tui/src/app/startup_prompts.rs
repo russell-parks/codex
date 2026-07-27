@@ -5,6 +5,7 @@
 
 use super::*;
 use codex_config::ConfigLayerSource;
+use codex_git_utils::worktree::PreparedWorktree;
 use std::collections::HashSet;
 use std::path::PathBuf;
 
@@ -275,6 +276,7 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
     model: &str,
     app_event_tx: &AppEventSender,
     available_models: &[ModelPreset],
+    worktree_cleanup: Option<PreparedWorktree>,
 ) -> Option<AppExitInfo> {
     let upgrade = available_models
         .iter()
@@ -342,19 +344,23 @@ pub(super) async fn handle_model_migration_prompt_if_needed(
                 });
             }
             ModelMigrationOutcome::Exit => {
-                return Some(AppExitInfo {
-                    token_usage: TokenUsage::default(),
-                    thread_id: None,
-                    resume_hint: None,
-                    update_action: None,
-                    worktree_cleanup: None,
-                    exit_reason: ExitReason::UserRequested,
-                });
+                return Some(model_migration_exit_info(worktree_cleanup));
             }
         }
     }
 
     None
+}
+
+fn model_migration_exit_info(worktree_cleanup: Option<PreparedWorktree>) -> AppExitInfo {
+    AppExitInfo {
+        token_usage: TokenUsage::default(),
+        thread_id: None,
+        resume_hint: None,
+        update_action: None,
+        worktree_cleanup,
+        exit_reason: ExitReason::UserRequested,
+    }
 }
 pub(super) fn normalize_harness_overrides_for_cwd(
     mut overrides: ConfigOverrides,
@@ -399,6 +405,24 @@ mod tests {
             normalized.additional_writable_roots,
             vec![base_cwd.join("rel").into_path_buf()]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn model_migration_exit_info_preserves_worktree_cleanup() -> Result<()> {
+        let temp_dir = tempdir()?;
+        let prepared_worktree = PreparedWorktree {
+            source_root: temp_dir.path().join("repo"),
+            path: temp_dir.path().join("repo/.codex/worktrees/task"),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            generated_name: false,
+        };
+
+        let exit_info = model_migration_exit_info(Some(prepared_worktree.clone()));
+
+        assert_eq!(exit_info.worktree_cleanup, Some(prepared_worktree));
         Ok(())
     }
 

@@ -830,6 +830,7 @@ impl App {
             model.as_str(),
             &app_event_tx,
             &available_models,
+            worktree_cleanup.clone(),
         )
         .await;
         if let Some(exit_info) = exit_info {
