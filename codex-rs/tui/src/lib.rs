@@ -899,6 +899,22 @@ fn local_worktree_repo_hint_for_target<'a>(
     .map(Some)
 }
 
+fn validate_worktree_app_server_target(
+    cli_worktree: Option<&str>,
+    app_server_target: &AppServerTarget,
+) -> std::io::Result<()> {
+    if cli_worktree.is_none() {
+        return Ok(());
+    }
+
+    match app_server_target {
+        AppServerTarget::Embedded => Ok(()),
+        AppServerTarget::LocalDaemon { .. } | AppServerTarget::Remote { .. } => Err(
+            std::io::Error::other("--worktree is not supported when connected to an app server"),
+        ),
+    }
+}
+
 fn loader_overrides_are_default(loader_overrides: &LoaderOverrides) -> bool {
     let loader_overrides_are_default = loader_overrides.user_config_path.is_none()
         && loader_overrides.user_config_profile.is_none()
@@ -988,6 +1004,20 @@ fn validate_worktree_starts_new_session(
     }
 }
 
+fn final_cwd_override_for_launch(
+    uses_remote_workspace: bool,
+    cwd: Option<PathBuf>,
+    prepared_worktree: Option<&codex_git_utils::worktree::PreparedWorktree>,
+) -> Option<PathBuf> {
+    if uses_remote_workspace {
+        None
+    } else {
+        prepared_worktree
+            .map(|worktree| worktree.path.clone())
+            .or(cwd)
+    }
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -1067,6 +1097,7 @@ pub async fn run_main(
         default_daemon,
         reuse_implicit_local_daemon,
     );
+    validate_worktree_app_server_target(cli.worktree.as_deref(), &app_server_target)?;
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -1208,11 +1239,11 @@ pub async fn run_main(
         None
     };
 
-    let cwd_override = if app_server_target.uses_remote_workspace() {
-        None
-    } else {
-        cwd.clone()
-    };
+    let cwd_override = final_cwd_override_for_launch(
+        app_server_target.uses_remote_workspace(),
+        cwd.clone(),
+        worktree_cleanup.as_ref(),
+    );
 
     let additional_dirs = cli.add_dir.clone();
 
@@ -2771,6 +2802,38 @@ mod tests {
     }
 
     #[test]
+    fn worktree_app_server_target_validation_rejects_local_daemon_before_cwd_resolution()
+    -> color_eyre::Result<()> {
+        let target = AppServerTarget::LocalDaemon {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err = validate_worktree_app_server_target(Some("task"), &target)
+            .expect_err("local daemon worktree launch should be rejected");
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
+    fn worktree_app_server_target_validation_rejects_remote_before_cwd_resolution()
+    -> color_eyre::Result<()> {
+        let target = AppServerTarget::Remote {
+            endpoint: RemoteAppServerEndpoint::UnixSocket {
+                socket_path: AbsolutePathBuf::relative_to_current_dir("codex.sock")?,
+            },
+        };
+
+        let err = validate_worktree_app_server_target(Some("task"), &target)
+            .expect_err("remote worktree launch should be rejected");
+
+        assert!(err.to_string().contains("not supported"));
+        Ok(())
+    }
+
+    #[test]
     fn worktree_launch_repo_hint_keeps_no_worktree_daemon_launches_unchanged()
     -> color_eyre::Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2800,6 +2863,41 @@ mod tests {
 
         assert_eq!(repo_hint, Some(cwd.as_path()));
         Ok(())
+    }
+
+    #[test]
+    fn final_cwd_override_uses_prepared_worktree_path() {
+        let source_cwd = PathBuf::from("/repo");
+        let worktree_path = PathBuf::from("/repo/.codex/worktrees/task");
+        let prepared_worktree = codex_git_utils::worktree::PreparedWorktree {
+            source_root: source_cwd.clone(),
+            path: worktree_path.clone(),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            generated_name: false,
+        };
+
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(source_cwd),
+            Some(&prepared_worktree),
+        );
+
+        assert_eq!(cwd_override, Some(worktree_path));
+    }
+
+    #[test]
+    fn final_cwd_override_preserves_explicit_cwd_without_worktree() {
+        let explicit_cwd = PathBuf::from("/repo/subdir");
+
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(explicit_cwd.clone()),
+            /*prepared_worktree*/ None,
+        );
+
+        assert_eq!(cwd_override, Some(explicit_cwd));
     }
 
     #[test]

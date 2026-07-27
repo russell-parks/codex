@@ -42,6 +42,24 @@ fn creates_worktree_from_head() -> anyhow::Result<()> {
 }
 
 #[test]
+fn prepare_worktree_keeps_source_status_clean() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+
+    let _prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "clean-source".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )?;
+
+    assert_eq!(git_stdout(repo.path(), ["status", "--porcelain"])?, "");
+
+    Ok(())
+}
+
+#[test]
 fn reuses_existing_git_worktree() -> anyhow::Result<()> {
     let repo = TestRepo::new()?;
     let options = WorktreePrepareOptions {

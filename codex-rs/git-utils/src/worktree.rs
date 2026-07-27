@@ -13,6 +13,8 @@ use crate::operations::resolve_repository_root;
 use crate::operations::run_git_for_status;
 use crate::operations::run_git_for_stdout;
 
+const CODEX_WORKTREES_EXCLUDE: &str = ".codex/worktrees/";
+
 /// Base revision used when creating a Codex-owned Git worktree.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum GitWorktreeBaseRef {
@@ -71,6 +73,7 @@ pub fn prepare_worktree(
     let branch = format!("codex-worktree-{}", options.name);
     validate_branch_name(source_root.as_path(), &branch, &options.name)?;
     let base_ref = resolve_base_ref(source_root.as_path(), options.base_ref)?;
+    ensure_codex_worktrees_excluded(source_root.as_path())?;
 
     if path.try_exists()? {
         validate_existing_worktree(source_root.as_path(), path.as_path(), &branch)?;
@@ -147,6 +150,49 @@ pub fn worktree_status(path: &Path) -> Result<WorktreeStatus> {
     } else {
         Ok(WorktreeStatus::Dirty)
     }
+}
+
+fn ensure_codex_worktrees_excluded(source_root: &Path) -> Result<()> {
+    let common_dir = canonical_git_common_dir(source_root).with_context(|| {
+        format!("failed to inspect source repository common git dir at {source_root:?}")
+    })?;
+    let info_dir = common_dir.join("info");
+    std::fs::create_dir_all(info_dir.as_path())
+        .with_context(|| format!("failed to create git info directory {info_dir:?}"))?;
+    let exclude_path = info_dir.join("exclude");
+    let existing = match std::fs::read_to_string(exclude_path.as_path()) {
+        Ok(existing) => existing,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!("failed to read git local exclude file {exclude_path:?}")
+            });
+        }
+    };
+    if existing
+        .lines()
+        .any(|line| line.trim() == CODEX_WORKTREES_EXCLUDE)
+    {
+        return Ok(());
+    }
+
+    let mut exclude_file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(exclude_path.as_path())
+        .with_context(|| format!("failed to open git local exclude file {exclude_path:?}"))?;
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        use std::io::Write as _;
+        writeln!(exclude_file)
+            .with_context(|| format!("failed to update git local exclude file {exclude_path:?}"))?;
+    }
+    {
+        use std::io::Write as _;
+        writeln!(exclude_file, "{CODEX_WORKTREES_EXCLUDE}")
+            .with_context(|| format!("failed to update git local exclude file {exclude_path:?}"))?;
+    }
+
+    Ok(())
 }
 
 fn resolve_base_ref(source_root: &Path, base_ref: GitWorktreeBaseRef) -> Result<String> {
