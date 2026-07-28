@@ -367,9 +367,9 @@ impl WorktreeIncludeSourceFilter {
                 directory_prefixes,
             } => {
                 files.iter().any(|file| file.starts_with(relative_path))
-                    || directory_prefixes
-                        .iter()
-                        .any(|prefix| prefix == relative_path || prefix.starts_with(relative_path))
+                    || directory_prefixes.iter().any(|prefix| {
+                        prefix.starts_with(relative_path) || relative_path.starts_with(prefix)
+                    })
             }
         }
     }
@@ -1156,6 +1156,33 @@ mod tests {
             fs::read_to_string(target_root.join("ignored.secret"))?,
             "ignored"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn worktreeinclude_copies_empty_descendant_directories_under_ignored_directory()
+    -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        fs::create_dir_all(&source_root)?;
+        fs::create_dir_all(&target_root)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join(".gitignore"), "parent/\n")?;
+        fs::write(source_root.join(".worktreeinclude"), "parent/\n")?;
+        fs::create_dir_all(source_root.join("parent").join("nested-empty"))?;
+        run_git(&source_root, ["add", ".gitignore"])?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+
+        copy_worktree_include_files(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))?;
+
+        assert!(target_root.join("parent").join("nested-empty").is_dir());
         Ok(())
     }
 
