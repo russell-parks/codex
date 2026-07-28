@@ -126,6 +126,26 @@ fn worktreeinclude_copies_directory_style_pattern_recursively() -> anyhow::Resul
 }
 
 #[test]
+fn worktreeinclude_directory_style_pattern_does_not_copy_same_name_file() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_root = temp_dir.path().join("source");
+    let target_root = temp_dir.path().join("target");
+    fs::create_dir_all(&source_root)?;
+    fs::create_dir_all(&target_root)?;
+    fs::write(source_root.join(".worktreeinclude"), "foo/\n")?;
+    fs::write(source_root.join("foo"), "file")?;
+
+    copy_worktree_include_files_allow_all(&prepared_worktree(
+        &source_root,
+        &target_root,
+        /*created*/ true,
+    ))?;
+
+    assert!(!target_root.join("foo").exists());
+    Ok(())
+}
+
+#[test]
 fn worktreeinclude_copies_root_level_directory_glob_recursively() -> anyhow::Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let source_root = temp_dir.path().join("source");
@@ -322,6 +342,11 @@ fn worktreeinclude_derives_git_status_pathspecs_from_walk_roots() -> anyhow::Res
         root_glob_matcher.git_status_pathspecs(),
         vec![PathBuf::from(":(top,glob).env.*")]
     );
+    let brace_glob_matcher = WorktreeIncludeMatcher::from_contents("{foo,bar}.env\n")?;
+    assert_eq!(
+        brace_glob_matcher.git_status_pathspecs(),
+        vec![PathBuf::from(".")]
+    );
     Ok(())
 }
 
@@ -434,6 +459,27 @@ fn worktreeinclude_copies_only_untracked_or_ignored_source_files() -> anyhow::Re
         fs::read_to_string(target_root.join("ignored.secret"))?,
         "ignored"
     );
+    Ok(())
+}
+
+#[test]
+fn worktreeinclude_copies_brace_alternation_pattern() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_root = temp_dir.path().join("source");
+    let target_root = temp_dir.path().join("target");
+    fs::create_dir_all(&source_root)?;
+    fs::create_dir_all(&target_root)?;
+    run_git(&source_root, ["init", "-q"])?;
+    fs::write(source_root.join(".worktreeinclude"), "{foo,bar}.env\n")?;
+    fs::write(source_root.join("foo.env"), "foo")?;
+
+    copy_worktree_include_files(&prepared_worktree(
+        &source_root,
+        &target_root,
+        /*created*/ true,
+    ))?;
+
+    assert_eq!(fs::read_to_string(target_root.join("foo.env"))?, "foo");
     Ok(())
 }
 

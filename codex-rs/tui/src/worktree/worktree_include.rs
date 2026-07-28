@@ -77,6 +77,7 @@ fn worktree_include_matcher(
 
 struct WorktreeIncludeMatcher {
     globset: GlobSet,
+    directory_globset: GlobSet,
     walk_roots: Vec<PathBuf>,
     git_status_pathspecs: Vec<PathBuf>,
     directory_roots: Vec<PathBuf>,
@@ -207,6 +208,7 @@ impl WorktreeIncludeSourceFilter {
 impl WorktreeIncludeMatcher {
     fn from_contents(contents: &str) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
+        let mut directory_builder = GlobSetBuilder::new();
         let mut walk_roots = Vec::new();
         let mut git_status_pathspecs = Vec::new();
         let mut directory_roots = Vec::new();
@@ -221,7 +223,12 @@ impl WorktreeIncludeMatcher {
             }
 
             validate_worktree_include_pattern(pattern, line_number)?;
-            add_worktree_include_pattern(&mut builder, pattern, line_number)?;
+            add_worktree_include_pattern(
+                &mut builder,
+                &mut directory_builder,
+                pattern,
+                line_number,
+            )?;
             add_worktree_include_walk_root(&mut walk_roots, pattern);
             add_worktree_include_git_status_pathspec(&mut git_status_pathspecs, pattern);
             add_worktree_include_directory_root(&mut directory_roots, pattern);
@@ -247,6 +254,9 @@ impl WorktreeIncludeMatcher {
             globset: builder
                 .build()
                 .context("failed to build .worktreeinclude matcher")?,
+            directory_globset: directory_builder
+                .build()
+                .context("failed to build .worktreeinclude directory matcher")?,
             walk_roots,
             git_status_pathspecs,
             directory_roots,
@@ -263,12 +273,17 @@ impl WorktreeIncludeMatcher {
         self.globset.is_match(relative_path)
     }
 
+    fn is_directory_match(&self, relative_path: &Path) -> bool {
+        self.directory_globset.is_match(relative_path)
+    }
+
     fn may_match_descendant(&self, relative_path: &Path) -> bool {
         relative_path.as_os_str().is_empty()
             || self.walk_roots.iter().any(|root| {
                 if root.as_os_str().is_empty() {
                     self.descend_from_root
-                        || self.descend_into_matching_root_dirs && self.is_match(relative_path)
+                        || self.descend_into_matching_root_dirs
+                            && self.is_directory_match(relative_path)
                 } else {
                     root.starts_with(relative_path) || relative_path.starts_with(root)
                 }
@@ -303,6 +318,7 @@ fn validate_worktree_include_relative_path(path: &Path) -> Result<()> {
 
 fn add_worktree_include_pattern(
     builder: &mut GlobSetBuilder,
+    directory_builder: &mut GlobSetBuilder,
     pattern: &str,
     line_number: usize,
 ) -> Result<()> {
@@ -312,9 +328,11 @@ fn add_worktree_include_pattern(
         bail!("unsafe .worktreeinclude pattern on line {line_number}: {pattern:?}");
     }
 
-    add_glob(builder, pattern, line_number)?;
     if directory_pattern {
+        add_glob(directory_builder, pattern, line_number)?;
         add_glob(builder, &format!("{pattern}/**"), line_number)?;
+    } else {
+        add_glob(builder, pattern, line_number)?;
     }
 
     Ok(())
@@ -346,7 +364,8 @@ fn add_worktree_include_git_status_pathspec(pathspecs: &mut Vec<PathBuf>, patter
     let root = worktree_include_walk_root(pattern);
     let pathspec = if !root.as_os_str().is_empty() {
         root
-    } else if pattern.contains('/') {
+    } else if pattern.contains('/') || pattern_contains_git_pathspec_unsupported_glob_meta(pattern)
+    {
         PathBuf::from(".")
     } else if directory_pattern && path_contains_glob_meta(Path::new(pattern)) {
         PathBuf::from(format!(":(top,glob){pattern}/**"))
@@ -423,6 +442,10 @@ fn path_contains_glob_meta(path: &Path) -> bool {
     path.components().any(
         |component| matches!(component, Component::Normal(name) if os_str_contains_glob_meta(name)),
     )
+}
+
+fn pattern_contains_git_pathspec_unsupported_glob_meta(pattern: &str) -> bool {
+    pattern.bytes().any(|byte| matches!(byte, b'{' | b'}'))
 }
 
 fn untracked_directory_roots(
@@ -568,7 +591,7 @@ fn copy_matching_worktree_include_entry(
 
     if file_type.is_dir() {
         let directory_allowed = source_filter.allows_included_directory(relative_path, matcher);
-        if matcher.is_match(relative_path) && directory_allowed {
+        if matcher.is_directory_match(relative_path) && directory_allowed {
             create_worktree_include_target_dir(target_root, relative_path)?;
         }
         if directory_allowed && matcher.may_match_descendant(relative_path) {
