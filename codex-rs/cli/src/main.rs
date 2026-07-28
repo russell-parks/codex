@@ -30,6 +30,7 @@ use codex_state::StateRuntime;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
+use codex_tui::LocalStateDbStartupError;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -2361,14 +2362,17 @@ async fn run_interactive_tui(
         };
         if local_state_db::is_locked(startup_error.detail()) {
             local_state_db::print_locked_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !local_state_db::is_auto_backup_recoverable(startup_error) {
             local_state_db::print_diagnostic_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !attempted_backups.insert(startup_error.database_path().to_path_buf()) {
             local_state_db::print_diagnostic_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
 
@@ -2377,13 +2381,18 @@ async fn run_interactive_tui(
             Ok(backups) => local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)?,
             Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
+                cleanup_startup_error_worktree(startup_error);
                 return Ok(AppExitInfo::fatal(format!(
                     "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
                 )));
             }
         }
-        worktree::cleanup_worktree_on_exit(worktree::startup_retry_cleanup_worktree(startup_error));
+        cleanup_startup_error_worktree(startup_error);
     }
+}
+
+fn cleanup_startup_error_worktree(startup_error: &LocalStateDbStartupError) {
+    worktree::cleanup_worktree_on_exit(worktree::startup_retry_cleanup_worktree(startup_error));
 }
 
 fn resolve_remote_endpoint(

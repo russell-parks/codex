@@ -1084,7 +1084,7 @@ pub async fn run_main(
             bootstrap_config_toml.worktree.base_ref,
         )
         .map_err(|err| std::io::Error::other(err.to_string()))?
-        .expect("worktree flag should produce a worktree request");
+        .ok_or_else(|| std::io::Error::other("worktree flag did not produce a worktree request"))?;
         cwd = worktree::final_cwd_override_for_launch(
             /*uses_remote_workspace*/ false,
             source_cwd,
