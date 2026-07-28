@@ -150,7 +150,7 @@ fn worktreeinclude_copies_root_level_directory_glob_recursively() -> anyhow::Res
     let temp_dir = tempfile::tempdir()?;
     let source_root = temp_dir.path().join("source");
     let target_root = temp_dir.path().join("target");
-    fs::create_dir_all(source_root.join("cache-a"))?;
+    fs::create_dir_all(source_root.join("cache-a").join("nested-empty"))?;
     fs::create_dir_all(source_root.join("other-cache"))?;
     fs::create_dir_all(&target_root)?;
     fs::write(source_root.join(".worktreeinclude"), "cache-*/\n")?;
@@ -167,6 +167,7 @@ fn worktreeinclude_copies_root_level_directory_glob_recursively() -> anyhow::Res
         fs::read_to_string(target_root.join("cache-a").join("file.txt"))?,
         "cache"
     );
+    assert!(target_root.join("cache-a").join("nested-empty").is_dir());
     assert!(!target_root.join("other-cache").exists());
     Ok(())
 }
@@ -582,6 +583,32 @@ fn worktreeinclude_copies_empty_only_untracked_directory_root() -> anyhow::Resul
 
     assert!(target_root.join("empty-root").is_dir());
     assert!(target_root.join("empty-root").join("nested-empty").is_dir());
+    Ok(())
+}
+
+#[test]
+fn worktreeinclude_copies_empty_descendant_directories_under_root_directory_glob()
+-> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_root = temp_dir.path().join("source");
+    let target_root = temp_dir.path().join("target");
+    fs::create_dir_all(&source_root)?;
+    fs::create_dir_all(&target_root)?;
+    run_git(&source_root, ["init", "-q"])?;
+    run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+    run_git(&source_root, ["config", "user.name", "Codex"])?;
+    fs::write(source_root.join(".worktreeinclude"), "cache-*/\n")?;
+    run_git(&source_root, ["add", ".worktreeinclude"])?;
+    run_git(&source_root, ["commit", "-qm", "init"])?;
+    fs::create_dir_all(source_root.join("cache-a").join("nested-empty"))?;
+
+    copy_worktree_include_files(&prepared_worktree(
+        &source_root,
+        &target_root,
+        /*created*/ true,
+    ))?;
+
+    assert!(target_root.join("cache-a").join("nested-empty").is_dir());
     Ok(())
 }
 

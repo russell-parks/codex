@@ -277,6 +277,13 @@ impl WorktreeIncludeMatcher {
         self.directory_globset.is_match(relative_path)
     }
 
+    fn is_under_directory_match(&self, relative_path: &Path) -> bool {
+        relative_path
+            .ancestors()
+            .filter(|ancestor| !ancestor.as_os_str().is_empty())
+            .any(|ancestor| self.is_directory_match(ancestor))
+    }
+
     fn may_match_descendant(&self, relative_path: &Path) -> bool {
         relative_path.as_os_str().is_empty()
             || self.walk_roots.iter().any(|root| {
@@ -469,6 +476,34 @@ fn untracked_directory_roots(
 
         roots.push(root.clone());
     }
+    if matcher.descend_into_matching_root_dirs {
+        for entry in std::fs::read_dir(source_root)
+            .with_context(|| format!("failed to read directory {}", source_root.display()))?
+        {
+            let entry = entry.with_context(|| {
+                format!(
+                    "failed to read directory entry in {}",
+                    source_root.display()
+                )
+            })?;
+            let relative_path = PathBuf::from(entry.file_name());
+            let source_path = source_root.join(&relative_path);
+            let metadata = match std::fs::symlink_metadata(&source_path) {
+                Ok(metadata) => metadata,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => {
+                    return Err(err)
+                        .with_context(|| format!("failed to inspect {}", source_path.display()));
+                }
+            };
+            if metadata.file_type().is_dir()
+                && matcher.is_directory_match(&relative_path)
+                && !git_has_tracked_entries_under(source_root, &relative_path)?
+            {
+                roots.push(relative_path);
+            }
+        }
+    }
     Ok(roots)
 }
 
@@ -591,7 +626,7 @@ fn copy_matching_worktree_include_entry(
 
     if file_type.is_dir() {
         let directory_allowed = source_filter.allows_included_directory(relative_path, matcher);
-        if matcher.is_directory_match(relative_path) && directory_allowed {
+        if matcher.is_under_directory_match(relative_path) && directory_allowed {
             create_worktree_include_target_dir(target_root, relative_path)?;
         }
         if directory_allowed && matcher.may_match_descendant(relative_path) {
