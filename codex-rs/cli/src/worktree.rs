@@ -1,5 +1,6 @@
 use std::io;
 use std::io::BufRead;
+use std::io::IsTerminal;
 use std::io::Write;
 
 use anyhow::Result;
@@ -12,8 +13,12 @@ pub(crate) fn parse_cleanup_confirmation(input: &str) -> bool {
     answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes")
 }
 
-pub(crate) fn should_prompt_cleanup(worktree: &PreparedWorktree) -> bool {
-    worktree.created
+pub(crate) fn should_prompt_cleanup(
+    worktree: &PreparedWorktree,
+    stdin_is_terminal: bool,
+    stderr_is_terminal: bool,
+) -> bool {
+    worktree.created && stdin_is_terminal && stderr_is_terminal
 }
 
 pub(crate) trait CleanupRunner {
@@ -23,18 +28,28 @@ pub(crate) trait CleanupRunner {
 
 pub(crate) fn cleanup_worktree_on_exit(worktree: Option<&PreparedWorktree>) {
     let stdin = io::stdin();
+    let stdin_is_terminal = stdin.is_terminal();
     let mut input = stdin.lock();
     let stderr = io::stderr();
+    let stderr_is_terminal = stderr.is_terminal();
     let mut output = stderr.lock();
     let mut runner = GitCleanupRunner;
-    if let Err(err) = cleanup_worktree_on_exit_with(worktree, &mut input, &mut output, &mut runner)
-    {
+    if let Err(err) = cleanup_worktree_on_exit_with(
+        worktree,
+        stdin_is_terminal,
+        stderr_is_terminal,
+        &mut input,
+        &mut output,
+        &mut runner,
+    ) {
         eprintln!("WARNING: failed to run Codex worktree cleanup prompt: {err}");
     }
 }
 
 pub(crate) fn cleanup_worktree_on_exit_with<R, I, W>(
     worktree: Option<&PreparedWorktree>,
+    stdin_is_terminal: bool,
+    stderr_is_terminal: bool,
     input: &mut I,
     output: &mut W,
     runner: &mut R,
@@ -44,7 +59,9 @@ where
     I: BufRead,
     W: Write,
 {
-    let Some(worktree) = worktree.filter(|worktree| should_prompt_cleanup(worktree)) else {
+    let Some(worktree) = worktree
+        .filter(|worktree| should_prompt_cleanup(worktree, stdin_is_terminal, stderr_is_terminal))
+    else {
         return Ok(());
     };
 
@@ -123,7 +140,60 @@ mod tests {
         let mut output = Vec::new();
         let mut runner = FakeCleanupRunner::default();
 
-        cleanup_worktree_on_exit_with(Some(&worktree), &mut input, &mut output, &mut runner)?;
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ true,
+            /*stderr_is_terminal*/ true,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
+
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+        assert_eq!(runner.removed, Vec::<PathBuf>::new());
+        assert_eq!(runner.deleted, Vec::<String>::new());
+
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_skips_created_worktree_when_stdin_is_not_terminal() -> io::Result<()> {
+        let worktree = prepared_worktree(/*created*/ true);
+        let mut input = io::Cursor::new("y\n");
+        let mut output = Vec::new();
+        let mut runner = FakeCleanupRunner::default();
+
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ false,
+            /*stderr_is_terminal*/ true,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
+
+        assert_eq!(String::from_utf8(output).unwrap(), "");
+        assert_eq!(runner.removed, Vec::<PathBuf>::new());
+        assert_eq!(runner.deleted, Vec::<String>::new());
+
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_skips_created_worktree_when_stderr_is_not_terminal() -> io::Result<()> {
+        let worktree = prepared_worktree(/*created*/ true);
+        let mut input = io::Cursor::new("y\n");
+        let mut output = Vec::new();
+        let mut runner = FakeCleanupRunner::default();
+
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ true,
+            /*stderr_is_terminal*/ false,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
 
         assert_eq!(String::from_utf8(output).unwrap(), "");
         assert_eq!(runner.removed, Vec::<PathBuf>::new());
@@ -139,7 +209,14 @@ mod tests {
         let mut output = Vec::new();
         let mut runner = FakeCleanupRunner::default();
 
-        cleanup_worktree_on_exit_with(Some(&worktree), &mut input, &mut output, &mut runner)?;
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ true,
+            /*stderr_is_terminal*/ true,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
 
         assert!(String::from_utf8(output).unwrap().contains("[y/N]"));
         assert_eq!(runner.removed, Vec::<PathBuf>::new());
@@ -158,7 +235,14 @@ mod tests {
             ..Default::default()
         };
 
-        cleanup_worktree_on_exit_with(Some(&worktree), &mut input, &mut output, &mut runner)?;
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ true,
+            /*stderr_is_terminal*/ true,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
 
         assert_eq!(runner.removed, vec![worktree.path.clone()]);
         assert_eq!(runner.deleted, vec![worktree.branch.clone()]);
@@ -181,7 +265,14 @@ mod tests {
             ..Default::default()
         };
 
-        cleanup_worktree_on_exit_with(Some(&worktree), &mut input, &mut output, &mut runner)?;
+        cleanup_worktree_on_exit_with(
+            Some(&worktree),
+            /*stdin_is_terminal*/ true,
+            /*stderr_is_terminal*/ true,
+            &mut input,
+            &mut output,
+            &mut runner,
+        )?;
 
         assert_eq!(runner.removed, vec![worktree.path.clone()]);
         assert_eq!(runner.deleted, Vec::<String>::new());
