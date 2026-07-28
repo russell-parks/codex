@@ -40,6 +40,7 @@ pub struct PreparedWorktree {
     pub branch: String,
     pub base_ref: String,
     pub created: bool,
+    pub branch_created: bool,
     pub generated_name: bool,
 }
 
@@ -83,6 +84,7 @@ pub fn prepare_worktree(
             branch,
             base_ref,
             created: false,
+            branch_created: false,
             generated_name: options.generated_name,
         });
     }
@@ -91,7 +93,8 @@ pub fn prepare_worktree(
     std::fs::create_dir_all(worktrees_root.as_path())
         .with_context(|| format!("failed to create codex worktree directory {worktrees_root:?}"))?;
 
-    let args = if local_branch_exists(source_root.as_path(), &branch)? {
+    let branch_exists = local_branch_exists(source_root.as_path(), &branch)?;
+    let args = if branch_exists {
         if let Some(checked_out_path) = branch_checked_out_path(source_root.as_path(), &branch)? {
             bail!(
                 "git worktree branch {branch:?} is already checked out at {checked_out_path:?}; run `git worktree prune` or remove that worktree before recreating"
@@ -124,6 +127,7 @@ pub fn prepare_worktree(
         branch,
         base_ref,
         created: true,
+        branch_created: !branch_exists,
         generated_name: options.generated_name,
     })
 }

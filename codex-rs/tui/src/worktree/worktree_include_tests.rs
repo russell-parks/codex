@@ -619,6 +619,7 @@ fn prepared_worktree(source_root: &Path, target_root: &Path, created: bool) -> P
         branch: "codex-worktree-task".to_string(),
         base_ref: "HEAD".to_string(),
         created,
+        branch_created: created,
         generated_name: false,
     }
 }

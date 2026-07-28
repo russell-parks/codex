@@ -34,6 +34,7 @@ fn creates_worktree_from_head() -> anyhow::Result<()> {
     assert_eq!(prepared.branch, "codex-worktree-task-2");
     assert_eq!(prepared.base_ref, "HEAD");
     assert_eq!(prepared.created, true);
+    assert_eq!(prepared.branch_created, true);
     assert_eq!(prepared.generated_name, false);
     assert_eq!(
         git_stdout(prepared.path.as_path(), ["branch", "--show-current"])?,
@@ -74,10 +75,36 @@ fn reuses_existing_git_worktree() -> anyhow::Result<()> {
     let reused = prepare_worktree(repo.path(), options)?;
 
     assert_eq!(created.created, true);
+    assert_eq!(created.branch_created, true);
     assert_eq!(reused.created, false);
+    assert_eq!(reused.branch_created, false);
     assert_eq!(reused.path, created.path);
     assert_eq!(reused.branch, "codex-worktree-reuse");
     assert_eq!(reused.generated_name, true);
+
+    Ok(())
+}
+
+#[test]
+fn creates_worktree_from_existing_branch_without_taking_branch_ownership() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    git_status(repo.path(), ["branch", "codex-worktree-existing"])?;
+
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "existing".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )?;
+
+    assert_eq!(prepared.created, true);
+    assert_eq!(prepared.branch_created, false);
+    assert_eq!(
+        git_stdout(prepared.path.as_path(), ["branch", "--show-current"])?,
+        "codex-worktree-existing"
+    );
 
     Ok(())
 }
@@ -269,6 +296,7 @@ fn recreates_missing_worktree_from_existing_unused_branch() -> anyhow::Result<()
     let recreated = prepare_worktree(repo.path(), options)?;
 
     assert_eq!(recreated.created, true);
+    assert_eq!(recreated.branch_created, false);
     assert_eq!(recreated.branch, "codex-worktree-recreate");
     assert_eq!(
         git_stdout(recreated.path.as_path(), ["branch", "--show-current"])?,

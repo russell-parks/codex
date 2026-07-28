@@ -469,6 +469,7 @@ mod tests {
             branch: "codex-worktree-task".to_string(),
             base_ref: "HEAD".to_string(),
             created: true,
+            branch_created: true,
             generated_name: false,
         };
 
@@ -505,6 +506,7 @@ mod tests {
             branch: "codex-worktree-task".to_string(),
             base_ref: "HEAD".to_string(),
             created: true,
+            branch_created: true,
             generated_name: false,
         };
 
