@@ -2382,6 +2382,7 @@ async fn run_interactive_tui(
                 )));
             }
         }
+        worktree::cleanup_worktree_on_exit(worktree::startup_retry_cleanup_worktree(startup_error));
     }
 }
 

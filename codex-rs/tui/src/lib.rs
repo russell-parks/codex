@@ -1239,7 +1239,9 @@ pub async fn run_main(
             codex_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
         let _ = codex_state::install_process_db_telemetry(telemetry);
     }
-    let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
+    let state_db = init_state_db_for_app_server_target(&config, &app_server_target)
+        .await
+        .map_err(|err| attach_worktree_cleanup_to_startup_error(err, worktree_cleanup.clone()))?;
     let config_toml_log_dir_configured = config
         .config_layer_stack
         .effective_config()
@@ -1375,6 +1377,29 @@ pub async fn run_main(
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+fn attach_worktree_cleanup_to_startup_error(
+    err: std::io::Error,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
+) -> std::io::Error {
+    if err
+        .get_ref()
+        .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+        .is_none()
+    {
+        return err;
+    }
+
+    let Some(inner) = err.into_inner() else {
+        return std::io::Error::other("failed to unwrap local state db startup error");
+    };
+    match inner.downcast::<LocalStateDbStartupError>() {
+        Ok(startup_error) => {
+            std::io::Error::other(startup_error.with_worktree_cleanup(worktree_cleanup))
+        }
+        Err(err) => std::io::Error::other(err),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3293,6 +3318,31 @@ mod tests {
             "error should preserve the embedded app server startup context"
         );
         Ok(())
+    }
+
+    #[test]
+    fn state_db_startup_error_can_carry_worktree_cleanup_metadata() {
+        let worktree_cleanup = codex_git_utils::worktree::PreparedWorktree {
+            source_root: PathBuf::from("/repo"),
+            path: PathBuf::from("/repo/.codex/worktrees/task"),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            branch_created: true,
+            generated_name: false,
+        };
+        let err = std::io::Error::other(LocalStateDbStartupError::new(
+            PathBuf::from("/repo/.codex/state.sqlite"),
+            "database disk image is malformed".to_string(),
+        ));
+
+        let err = attach_worktree_cleanup_to_startup_error(err, Some(worktree_cleanup.clone()));
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(startup_error.worktree_cleanup(), Some(&worktree_cleanup));
     }
 
     #[tokio::test]

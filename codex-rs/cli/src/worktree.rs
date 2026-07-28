@@ -7,6 +7,7 @@ use anyhow::Result;
 use codex_git_utils::worktree::PreparedWorktree;
 use codex_git_utils::worktree::delete_branch;
 use codex_git_utils::worktree::remove_worktree;
+use codex_tui::LocalStateDbStartupError;
 
 pub(crate) fn parse_cleanup_confirmation(input: &str) -> bool {
     let answer = input.trim();
@@ -19,6 +20,14 @@ pub(crate) fn should_prompt_cleanup(
     stderr_is_terminal: bool,
 ) -> bool {
     worktree.created && stdin_is_terminal && stderr_is_terminal
+}
+
+pub(crate) fn startup_retry_cleanup_worktree(
+    startup_error: &LocalStateDbStartupError,
+) -> Option<&PreparedWorktree> {
+    startup_error
+        .worktree_cleanup()
+        .filter(|worktree| worktree.created)
 }
 
 pub(crate) trait CleanupRunner {

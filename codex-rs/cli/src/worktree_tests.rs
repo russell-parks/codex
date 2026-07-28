@@ -5,11 +5,13 @@ use std::path::PathBuf;
 use anyhow::Context;
 use anyhow::Result;
 use codex_git_utils::worktree::PreparedWorktree;
+use codex_tui::LocalStateDbStartupError;
 use pretty_assertions::assert_eq;
 
 use super::CleanupRunner;
 use super::cleanup_worktree_on_exit_with;
 use super::parse_cleanup_confirmation;
+use super::startup_retry_cleanup_worktree;
 
 #[test]
 fn cleanup_confirmation_accepts_yes_only() {
@@ -139,6 +141,52 @@ fn cleanup_preserves_unowned_existing_branch_after_remove() -> io::Result<()> {
 }
 
 #[test]
+fn startup_retry_cleanup_removes_worktree_created_by_failed_launch() -> io::Result<()> {
+    let worktree = prepared_worktree(/*created*/ true, /*branch_created*/ true);
+    let startup_error = startup_error_with_worktree(worktree.clone());
+    let mut input = io::Cursor::new("yes\n");
+    let mut output = Vec::new();
+    let mut runner = FakeCleanupRunner::default();
+
+    cleanup_worktree_on_exit_with(
+        startup_retry_cleanup_worktree(&startup_error),
+        /*stdin_is_terminal*/ true,
+        /*stderr_is_terminal*/ true,
+        &mut input,
+        &mut output,
+        &mut runner,
+    )?;
+
+    assert_eq!(runner.removed, vec![worktree.path]);
+    assert_eq!(runner.deleted, vec![worktree.branch]);
+
+    Ok(())
+}
+
+#[test]
+fn startup_retry_cleanup_skips_preexisting_reused_worktree() -> io::Result<()> {
+    let worktree = prepared_worktree(/*created*/ false, /*branch_created*/ false);
+    let startup_error = startup_error_with_worktree(worktree);
+    let mut input = io::Cursor::new("yes\n");
+    let mut output = Vec::new();
+    let mut runner = FakeCleanupRunner::default();
+
+    cleanup_worktree_on_exit_with(
+        startup_retry_cleanup_worktree(&startup_error),
+        /*stdin_is_terminal*/ true,
+        /*stderr_is_terminal*/ true,
+        &mut input,
+        &mut output,
+        &mut runner,
+    )?;
+
+    assert_eq!(runner.removed, Vec::<PathBuf>::new());
+    assert_eq!(runner.deleted, Vec::<String>::new());
+
+    Ok(())
+}
+
+#[test]
 fn branch_delete_failure_is_nonfatal_after_remove() -> io::Result<()> {
     let worktree = prepared_worktree(/*created*/ true, /*branch_created*/ true);
     let mut input = io::Cursor::new("yes\n");
@@ -242,6 +290,14 @@ fn prepared_worktree(created: bool, branch_created: bool) -> PreparedWorktree {
         branch_created,
         generated_name: false,
     }
+}
+
+fn startup_error_with_worktree(worktree: PreparedWorktree) -> LocalStateDbStartupError {
+    LocalStateDbStartupError::new(
+        Path::new("/repo/.codex/state.sqlite").to_path_buf(),
+        "database disk image is malformed".to_string(),
+    )
+    .with_worktree_cleanup(Some(worktree))
 }
 
 #[derive(Default)]
