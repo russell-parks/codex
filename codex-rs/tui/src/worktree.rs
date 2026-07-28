@@ -287,6 +287,7 @@ fn worktree_include_matcher(
 struct WorktreeIncludeMatcher {
     globset: GlobSet,
     walk_roots: Vec<PathBuf>,
+    directory_roots: Vec<PathBuf>,
     descend_from_root: bool,
 }
 
@@ -392,12 +393,25 @@ impl WorktreeIncludeSourceFilter {
             }
         }
     }
+
+    fn allows_included_directory(
+        &self,
+        relative_path: &Path,
+        matcher: &WorktreeIncludeMatcher,
+    ) -> bool {
+        self.allows_directory(relative_path)
+            || matcher
+                .directory_roots
+                .iter()
+                .any(|root| relative_path.starts_with(root) && self.allows_directory(root))
+    }
 }
 
 impl WorktreeIncludeMatcher {
     fn from_contents(contents: &str) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
         let mut walk_roots = Vec::new();
+        let mut directory_roots = Vec::new();
         let mut descend_from_root = false;
 
         for (line_index, line) in contents.lines().enumerate() {
@@ -410,6 +424,7 @@ impl WorktreeIncludeMatcher {
             validate_worktree_include_pattern(pattern, line_number)?;
             add_worktree_include_pattern(&mut builder, pattern, line_number)?;
             add_worktree_include_walk_root(&mut walk_roots, pattern);
+            add_worktree_include_directory_root(&mut directory_roots, pattern);
             if worktree_include_walk_root(pattern).as_os_str().is_empty()
                 && pattern.trim_end_matches('/').contains('/')
             {
@@ -422,6 +437,7 @@ impl WorktreeIncludeMatcher {
                 .build()
                 .context("failed to build .worktreeinclude matcher")?,
             walk_roots,
+            directory_roots,
             descend_from_root,
         })
     }
@@ -497,6 +513,23 @@ fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, line_number: usize) -> 
 
 fn add_worktree_include_walk_root(roots: &mut Vec<PathBuf>, pattern: &str) {
     let root = worktree_include_walk_root(pattern);
+    add_worktree_include_root(roots, root);
+}
+
+fn add_worktree_include_directory_root(roots: &mut Vec<PathBuf>, pattern: &str) {
+    if !pattern.ends_with('/') {
+        return;
+    }
+
+    let root = PathBuf::from(pattern.trim_end_matches('/'));
+    if root.as_os_str().is_empty() || path_contains_glob_meta(&root) {
+        return;
+    }
+
+    add_worktree_include_root(roots, root);
+}
+
+fn add_worktree_include_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
     if roots.iter().any(|existing| existing == &root) {
         return;
     }
@@ -538,6 +571,12 @@ fn os_str_contains_glob_meta(value: &OsStr) -> bool {
         .to_string_lossy()
         .bytes()
         .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
+}
+
+fn path_contains_glob_meta(path: &Path) -> bool {
+    path.components().any(
+        |component| matches!(component, Component::Normal(name) if os_str_contains_glob_meta(name)),
+    )
 }
 
 #[cfg(unix)]
@@ -635,7 +674,7 @@ fn copy_matching_worktree_include_entry(
     }
 
     if file_type.is_dir() {
-        let directory_allowed = source_filter.allows_directory(relative_path);
+        let directory_allowed = source_filter.allows_included_directory(relative_path, matcher);
         if matcher.is_match(relative_path) && directory_allowed {
             create_worktree_include_target_dir(target_root, relative_path)?;
         }
@@ -1483,6 +1522,55 @@ mod tests {
         ))?;
 
         assert!(target_root.join("parent").join("nested-empty").is_dir());
+        Ok(())
+    }
+
+    #[test]
+    fn worktreeinclude_copies_empty_descendant_directories_under_untracked_directory()
+    -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        fs::create_dir_all(&source_root)?;
+        fs::create_dir_all(&target_root)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join(".worktreeinclude"), "parent/\n")?;
+        fs::create_dir_all(source_root.join("parent"))?;
+        fs::write(source_root.join("parent").join("tracked.txt"), "tracked")?;
+        run_git(
+            &source_root,
+            ["add", ".worktreeinclude", "parent/tracked.txt"],
+        )?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+        fs::create_dir_all(source_root.join("parent").join("with-file"))?;
+        fs::create_dir_all(source_root.join("parent").join("nested-empty"))?;
+        fs::write(
+            source_root
+                .join("parent")
+                .join("with-file")
+                .join("file.txt"),
+            "untracked",
+        )?;
+
+        copy_worktree_include_files(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))?;
+
+        assert_eq!(
+            fs::read_to_string(
+                target_root
+                    .join("parent")
+                    .join("with-file")
+                    .join("file.txt")
+            )?,
+            "untracked"
+        );
+        assert!(target_root.join("parent").join("nested-empty").is_dir());
+        assert!(!target_root.join("parent").join("tracked.txt").exists());
         Ok(())
     }
 
