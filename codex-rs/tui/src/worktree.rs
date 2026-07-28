@@ -520,6 +520,36 @@ mod tests {
     }
 
     #[test]
+    fn prepare_launch_worktree_from_subdir_preserves_relative_cwd() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let source_subdir = source_root.join("subdir");
+        fs::create_dir_all(&source_subdir)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join("README.md"), "test\n")?;
+        run_git(&source_root, ["add", "README.md"])?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+
+        let prepared_worktree =
+            prepare_launch_worktree(&source_subdir, Some("task"), WorktreeBaseRef::Head)?
+                .expect("worktree flag should prepare a worktree");
+        let cwd_override = final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            Some(source_subdir),
+            Some(&prepared_worktree),
+        );
+
+        assert_eq!(
+            prepared_worktree.path,
+            source_root.join(".codex").join("worktrees").join("task")
+        );
+        assert_eq!(cwd_override, Some(prepared_worktree.path.join("subdir")));
+        Ok(())
+    }
+
+    #[test]
     fn validation_rejects_resume_last() {
         let err = validate_starts_new_session(
             Some("task"),
@@ -551,6 +581,28 @@ mod tests {
             err,
             "--worktree is only supported when starting a new interactive session"
         );
+    }
+
+    #[test]
+    fn validation_rejects_explicit_session_modes() {
+        for launch_mode in [
+            WorktreeLaunchMode {
+                resume_session_id: true,
+                ..Default::default()
+            },
+            WorktreeLaunchMode {
+                fork_session_id: true,
+                ..Default::default()
+            },
+        ] {
+            let err = validate_starts_new_session(Some("task"), launch_mode)
+                .expect_err("explicit session mode with worktree should be rejected");
+
+            assert_eq!(
+                err,
+                "--worktree is only supported when starting a new interactive session"
+            );
+        }
     }
 
     #[test]
