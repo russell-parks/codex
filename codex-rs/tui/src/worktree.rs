@@ -236,7 +236,7 @@ fn copy_worktree_include_files(prepared_worktree: &PreparedWorktree) -> Result<(
         return Ok(());
     };
     let source_filter =
-        WorktreeIncludeSourceFilter::from_git_status(&prepared_worktree.source_root)?;
+        WorktreeIncludeSourceFilter::from_git_status(&prepared_worktree.source_root, &matcher)?;
     copy_matching_worktree_include_entries(
         &prepared_worktree.source_root,
         &prepared_worktree.path,
@@ -303,11 +303,12 @@ enum WorktreeIncludeSourceFilter {
     GitStatus {
         files: HashSet<PathBuf>,
         directory_prefixes: Vec<PathBuf>,
+        untracked_directory_roots: Vec<PathBuf>,
     },
 }
 
 impl WorktreeIncludeSourceFilter {
-    fn from_git_status(source_root: &Path) -> Result<Self> {
+    fn from_git_status(source_root: &Path, matcher: &WorktreeIncludeMatcher) -> Result<Self> {
         let output = Command::new("git")
             .args([
                 "status",
@@ -355,10 +356,12 @@ impl WorktreeIncludeSourceFilter {
                 files.insert(relative_path);
             }
         }
+        let untracked_directory_roots = untracked_directory_roots(source_root, matcher)?;
 
         Ok(Self::GitStatus {
             files,
             directory_prefixes,
+            untracked_directory_roots,
         })
     }
 
@@ -369,6 +372,7 @@ impl WorktreeIncludeSourceFilter {
             Self::GitStatus {
                 files,
                 directory_prefixes,
+                untracked_directory_roots: _,
             } => {
                 files.contains(relative_path)
                     || directory_prefixes
@@ -385,10 +389,14 @@ impl WorktreeIncludeSourceFilter {
             Self::GitStatus {
                 files,
                 directory_prefixes,
+                untracked_directory_roots,
             } => {
                 files.iter().any(|file| file.starts_with(relative_path))
                     || directory_prefixes.iter().any(|prefix| {
                         prefix.starts_with(relative_path) || relative_path.starts_with(prefix)
+                    })
+                    || untracked_directory_roots.iter().any(|root| {
+                        root.starts_with(relative_path) || relative_path.starts_with(root)
                     })
             }
         }
@@ -577,6 +585,53 @@ fn path_contains_glob_meta(path: &Path) -> bool {
     path.components().any(
         |component| matches!(component, Component::Normal(name) if os_str_contains_glob_meta(name)),
     )
+}
+
+fn untracked_directory_roots(
+    source_root: &Path,
+    matcher: &WorktreeIncludeMatcher,
+) -> Result<Vec<PathBuf>> {
+    let mut roots = Vec::new();
+    for root in &matcher.directory_roots {
+        let source_path = source_root.join(root);
+        let metadata = match std::fs::symlink_metadata(&source_path) {
+            Ok(metadata) => metadata,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("failed to inspect {}", source_path.display()));
+            }
+        };
+        if !metadata.file_type().is_dir() || git_has_tracked_entries_under(source_root, root)? {
+            continue;
+        }
+
+        roots.push(root.clone());
+    }
+    Ok(roots)
+}
+
+fn git_has_tracked_entries_under(source_root: &Path, relative_path: &Path) -> Result<bool> {
+    let output = Command::new("git")
+        .args(["ls-files", "-z", "--"])
+        .arg(relative_path)
+        .current_dir(source_root)
+        .output()
+        .with_context(|| {
+            format!(
+                "failed to inspect tracked files under {}",
+                source_root.join(relative_path).display()
+            )
+        })?;
+    if !output.status.success() {
+        bail!(
+            "failed to inspect tracked files under {}: {}",
+            source_root.join(relative_path).display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(!output.stdout.is_empty())
 }
 
 #[cfg(unix)]
@@ -1571,6 +1626,32 @@ mod tests {
         );
         assert!(target_root.join("parent").join("nested-empty").is_dir());
         assert!(!target_root.join("parent").join("tracked.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn worktreeinclude_copies_empty_only_untracked_directory_root() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        fs::create_dir_all(&source_root)?;
+        fs::create_dir_all(&target_root)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join(".worktreeinclude"), "empty-root/\n")?;
+        run_git(&source_root, ["add", ".worktreeinclude"])?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+        fs::create_dir_all(source_root.join("empty-root").join("nested-empty"))?;
+
+        copy_worktree_include_files(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))?;
+
+        assert!(target_root.join("empty-root").is_dir());
+        assert!(target_root.join("empty-root").join("nested-empty").is_dir());
         Ok(())
     }
 
