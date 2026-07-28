@@ -232,6 +232,47 @@ fn worktreeinclude_derives_literal_walk_roots() -> anyhow::Result<()> {
 }
 
 #[test]
+fn worktreeinclude_root_level_glob_does_not_match_descendant_directories() -> anyhow::Result<()> {
+    let matcher = WorktreeIncludeMatcher::from_contents(".env.*\n")?;
+
+    assert!(!matcher.may_match_descendant(Path::new("nested")));
+
+    let mixed_matcher = WorktreeIncludeMatcher::from_contents(".env.*\nconfig/*.local\n")?;
+    assert!(mixed_matcher.may_match_descendant(Path::new("config")));
+    assert!(!mixed_matcher.may_match_descendant(Path::new("nested")));
+    Ok(())
+}
+
+#[cfg(unix)]
+#[test]
+fn worktreeinclude_root_level_glob_does_not_traverse_nested_directories() -> anyhow::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp_dir = tempfile::tempdir()?;
+    let source_root = temp_dir.path().join("source");
+    let target_root = temp_dir.path().join("target");
+    let nested_dir = source_root.join("nested");
+    fs::create_dir_all(&nested_dir)?;
+    fs::create_dir_all(&target_root)?;
+    fs::write(source_root.join(".worktreeinclude"), ".env.*\n")?;
+    fs::write(source_root.join(".env.local"), "root")?;
+    fs::write(nested_dir.join(".env.local"), "nested")?;
+    fs::set_permissions(&nested_dir, fs::Permissions::from_mode(0o000))?;
+
+    let result = copy_worktree_include_files_allow_all(&prepared_worktree(
+        &source_root,
+        &target_root,
+        /*created*/ true,
+    ));
+    fs::set_permissions(&nested_dir, fs::Permissions::from_mode(0o700))?;
+    result?;
+
+    assert_eq!(fs::read_to_string(target_root.join(".env.local"))?, "root");
+    assert!(!target_root.join("nested").exists());
+    Ok(())
+}
+
+#[test]
 fn worktreeinclude_derives_git_status_pathspecs_from_walk_roots() -> anyhow::Result<()> {
     let matcher =
         WorktreeIncludeMatcher::from_contents(".env\nconfig/*.local\nparent/\nnested/**/file\n")?;

@@ -248,9 +248,11 @@ impl WorktreeIncludeMatcher {
     fn may_match_descendant(&self, relative_path: &Path) -> bool {
         relative_path.as_os_str().is_empty()
             || self.walk_roots.iter().any(|root| {
-                root.as_os_str().is_empty() && self.descend_from_root
-                    || root.starts_with(relative_path)
-                    || relative_path.starts_with(root)
+                if root.as_os_str().is_empty() {
+                    self.descend_from_root
+                } else {
+                    root.starts_with(relative_path) || relative_path.starts_with(root)
+                }
             })
     }
 
@@ -342,17 +344,15 @@ fn add_worktree_include_root(roots: &mut Vec<PathBuf>, root: PathBuf) {
     }
 
     if root.as_os_str().is_empty() {
-        roots.clear();
         roots.push(root);
         return;
     }
 
-    if roots.iter().any(|existing| existing.as_os_str().is_empty()) {
-        return;
-    }
-
     roots.retain(|existing| !existing.starts_with(&root));
-    if !roots.iter().any(|existing| root.starts_with(existing)) {
+    if !roots
+        .iter()
+        .any(|existing| !existing.as_os_str().is_empty() && root.starts_with(existing))
+    {
         roots.push(root);
     }
 }
