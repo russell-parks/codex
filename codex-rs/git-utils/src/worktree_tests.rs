@@ -8,7 +8,9 @@ use tempfile::TempDir;
 use super::GitWorktreeBaseRef;
 use super::WorktreePrepareOptions;
 use super::WorktreeStatus;
+use super::delete_branch;
 use super::prepare_worktree;
+use super::remove_worktree;
 use super::worktree_status;
 
 #[test]
@@ -311,6 +313,85 @@ fn reports_worktree_status() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn removes_clean_worktree() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "remove-clean".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )?;
+
+    remove_worktree(repo.path(), prepared.path.as_path())?;
+
+    assert!(!prepared.path.exists());
+    assert_eq!(
+        git_stdout(repo.path(), ["branch", "--list", &prepared.branch])?,
+        prepared.branch
+    );
+
+    Ok(())
+}
+
+#[test]
+fn removing_dirty_worktree_fails_without_force() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "remove-dirty".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )?;
+    std::fs::write(prepared.path.join("dirty.txt"), "dirty\n")?;
+
+    let err = remove_worktree(repo.path(), prepared.path.as_path())
+        .expect_err("dirty worktree should not be removed without --force");
+
+    assert!(error_chain_contains(
+        &err,
+        "contains modified or untracked files"
+    ));
+    assert!(prepared.path.exists());
+
+    Ok(())
+}
+
+#[test]
+fn delete_branch_reports_unmerged_branch_error() -> anyhow::Result<()> {
+    let repo = TestRepo::new()?;
+    let prepared = prepare_worktree(
+        repo.path(),
+        WorktreePrepareOptions {
+            name: "unmerged".to_string(),
+            base_ref: GitWorktreeBaseRef::Head,
+            generated_name: false,
+        },
+    )?;
+    std::fs::write(prepared.path.join("feature.txt"), "feature\n")?;
+    git_status(prepared.path.as_path(), ["add", "."])?;
+    git_status(prepared.path.as_path(), ["commit", "-m", "feature"])?;
+    git_status_os(
+        repo.path(),
+        vec![
+            "worktree".into(),
+            "remove".into(),
+            prepared.path.as_os_str().to_os_string(),
+        ],
+    )?;
+
+    let err = delete_branch(repo.path(), &prepared.branch)
+        .expect_err("unmerged branch should not be deleted with -d");
+
+    assert!(error_chain_contains(&err, "not fully merged"));
+
+    Ok(())
+}
+
 struct TestRepo {
     _temp_dir: TempDir,
     root: std::path::PathBuf,
@@ -319,7 +400,7 @@ struct TestRepo {
 impl TestRepo {
     fn new() -> anyhow::Result<Self> {
         let temp_dir = tempfile::tempdir()?;
-        let root = temp_dir.path().to_path_buf();
+        let root = temp_dir.path().canonicalize()?;
         git_status(root.as_path(), ["init", "-b", "main"])?;
         git_status(
             root.as_path(),
@@ -339,6 +420,10 @@ impl TestRepo {
     fn path(&self) -> &Path {
         self.root.as_path()
     }
+}
+
+fn error_chain_contains(err: &anyhow::Error, expected: &str) -> bool {
+    format!("{err:#}").contains(expected)
 }
 
 fn git_status<I, S>(cwd: &Path, args: I) -> anyhow::Result<()>

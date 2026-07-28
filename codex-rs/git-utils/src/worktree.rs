@@ -152,6 +152,44 @@ pub fn worktree_status(path: &Path) -> Result<WorktreeStatus> {
     }
 }
 
+/// Remove a Git worktree without forcing dirty checkout cleanup.
+///
+/// # Errors
+///
+/// Returns an error when Git cannot remove the worktree. Dirty worktrees are
+/// expected to fail because this helper intentionally does not pass `--force`.
+pub fn remove_worktree(source_root: &Path, worktree_path: &Path) -> Result<()> {
+    run_git_for_status(
+        source_root,
+        [
+            OsString::from("worktree"),
+            OsString::from("remove"),
+            worktree_path.as_os_str().to_os_string(),
+        ],
+        /*env*/ None,
+    )
+    .with_context(|| format!("failed to remove git worktree at {worktree_path:?}"))
+}
+
+/// Delete a local Git branch with `git branch -d`.
+///
+/// # Errors
+///
+/// Returns an error when Git declines to delete the branch, including when the
+/// branch is unmerged or checked out by another worktree.
+pub fn delete_branch(source_root: &Path, branch: &str) -> Result<()> {
+    run_git_for_status(
+        source_root,
+        [
+            OsString::from("branch"),
+            OsString::from("-d"),
+            OsString::from(branch),
+        ],
+        /*env*/ None,
+    )
+    .with_context(|| format!("failed to delete git branch {branch:?}"))
+}
+
 fn ensure_codex_worktrees_excluded(source_root: &Path) -> Result<()> {
     let common_dir = canonical_git_common_dir(source_root).with_context(|| {
         format!("failed to inspect source repository common git dir at {source_root:?}")

@@ -56,6 +56,7 @@ mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
 mod state_db_recovery;
+mod worktree;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -2349,7 +2350,10 @@ async fn run_interactive_tui(
     let mut attempted_backups = HashSet::new();
     loop {
         let err = match start_tui().await {
-            Ok(exit_info) => return Ok(exit_info),
+            Ok(exit_info) => {
+                worktree::cleanup_worktree_on_exit(exit_info.worktree_cleanup.as_ref());
+                return Ok(exit_info);
+            }
             Err(err) => err,
         };
         let Some(startup_error) = local_state_db::startup_error(&err) else {
