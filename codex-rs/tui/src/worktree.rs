@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::fs::OpenOptions;
 use std::io;
@@ -65,6 +66,8 @@ pub(crate) fn prepare_launch_worktree(
         return Ok(None);
     };
 
+    let branch_cleanup =
+        branch_cleanup_for_include_failure(repo_hint, &codex_worktree_branch_name(&request.name));
     let prepared_worktree = prepare_worktree(
         repo_hint,
         WorktreePrepareOptions {
@@ -73,7 +76,17 @@ pub(crate) fn prepare_launch_worktree(
             generated_name: request.generated_name,
         },
     )?;
-    copy_worktree_include_files(&prepared_worktree)?;
+    if let Err(err) = copy_worktree_include_files(&prepared_worktree) {
+        if prepared_worktree.created {
+            return Err(cleanup_created_worktree_after_include_failure(
+                &prepared_worktree,
+                branch_cleanup,
+                err,
+            ));
+        }
+
+        return Err(err);
+    }
     Ok(Some(prepared_worktree))
 }
 
@@ -227,7 +240,6 @@ fn copy_worktree_include_files(prepared_worktree: &PreparedWorktree) -> Result<(
     copy_matching_worktree_include_entries(
         &prepared_worktree.source_root,
         &prepared_worktree.path,
-        Path::new(""),
         &matcher,
         &source_filter,
     )
@@ -248,7 +260,6 @@ fn copy_worktree_include_files_with_source_filter(
     copy_matching_worktree_include_entries(
         &prepared_worktree.source_root,
         &prepared_worktree.path,
-        Path::new(""),
         &matcher,
         source_filter,
     )
@@ -275,6 +286,14 @@ fn worktree_include_matcher(
 
 struct WorktreeIncludeMatcher {
     globset: GlobSet,
+    walk_roots: Vec<PathBuf>,
+    descend_from_root: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BranchCleanup {
+    DeleteCreatedBranch,
+    PreserveExistingBranch,
 }
 
 enum WorktreeIncludeSourceFilter {
@@ -378,6 +397,8 @@ impl WorktreeIncludeSourceFilter {
 impl WorktreeIncludeMatcher {
     fn from_contents(contents: &str) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
+        let mut walk_roots = Vec::new();
+        let mut descend_from_root = false;
 
         for (line_index, line) in contents.lines().enumerate() {
             let line_number = line_index + 1;
@@ -388,12 +409,20 @@ impl WorktreeIncludeMatcher {
 
             validate_worktree_include_pattern(pattern, line_number)?;
             add_worktree_include_pattern(&mut builder, pattern, line_number)?;
+            add_worktree_include_walk_root(&mut walk_roots, pattern);
+            if worktree_include_walk_root(pattern).as_os_str().is_empty()
+                && pattern.trim_end_matches('/').contains('/')
+            {
+                descend_from_root = true;
+            }
         }
 
         Ok(Self {
             globset: builder
                 .build()
                 .context("failed to build .worktreeinclude matcher")?,
+            walk_roots,
+            descend_from_root,
         })
     }
 
@@ -403,6 +432,15 @@ impl WorktreeIncludeMatcher {
 
     fn is_match(&self, relative_path: &Path) -> bool {
         self.globset.is_match(relative_path)
+    }
+
+    fn may_match_descendant(&self, relative_path: &Path) -> bool {
+        relative_path.as_os_str().is_empty()
+            || self.walk_roots.iter().any(|root| {
+                root.as_os_str().is_empty() && self.descend_from_root
+                    || root.starts_with(relative_path)
+                    || relative_path.starts_with(root)
+            })
     }
 }
 
@@ -457,6 +495,51 @@ fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, line_number: usize) -> 
     Ok(())
 }
 
+fn add_worktree_include_walk_root(roots: &mut Vec<PathBuf>, pattern: &str) {
+    let root = worktree_include_walk_root(pattern);
+    if roots.iter().any(|existing| existing == &root) {
+        return;
+    }
+
+    if root.as_os_str().is_empty() {
+        roots.clear();
+        roots.push(root);
+        return;
+    }
+
+    if roots.iter().any(|existing| existing.as_os_str().is_empty()) {
+        return;
+    }
+
+    roots.retain(|existing| !existing.starts_with(&root));
+    if !roots.iter().any(|existing| root.starts_with(existing)) {
+        roots.push(root);
+    }
+}
+
+fn worktree_include_walk_root(pattern: &str) -> PathBuf {
+    let pattern = pattern.trim_end_matches('/');
+    let mut root = PathBuf::new();
+    for component in Path::new(pattern).components() {
+        let Component::Normal(name) = component else {
+            continue;
+        };
+        if os_str_contains_glob_meta(name) {
+            break;
+        }
+
+        root.push(name);
+    }
+    root
+}
+
+fn os_str_contains_glob_meta(value: &OsStr) -> bool {
+    value
+        .to_string_lossy()
+        .bytes()
+        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b']' | b'{' | b'}'))
+}
+
 #[cfg(unix)]
 fn path_buf_from_git_status_path(path: &[u8]) -> Result<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
@@ -473,6 +556,35 @@ fn path_buf_from_git_status_path(path: &[u8]) -> Result<PathBuf> {
 fn copy_matching_worktree_include_entries(
     source_root: &Path,
     target_root: &Path,
+    matcher: &WorktreeIncludeMatcher,
+    source_filter: &WorktreeIncludeSourceFilter,
+) -> Result<()> {
+    for relative_root in &matcher.walk_roots {
+        if relative_root.as_os_str().is_empty() {
+            copy_matching_worktree_include_directory_entries(
+                source_root,
+                target_root,
+                Path::new(""),
+                matcher,
+                source_filter,
+            )?;
+        } else {
+            copy_matching_worktree_include_entry(
+                source_root,
+                target_root,
+                relative_root,
+                matcher,
+                source_filter,
+            )?;
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_matching_worktree_include_directory_entries(
+    source_root: &Path,
+    target_root: &Path,
     relative_dir: &Path,
     matcher: &WorktreeIncludeMatcher,
     source_filter: &WorktreeIncludeSourceFilter,
@@ -485,37 +597,64 @@ fn copy_matching_worktree_include_entries(
             format!("failed to read directory entry in {}", source_dir.display())
         })?;
         let relative_path = relative_dir.join(entry.file_name());
-        if is_forbidden_worktree_include_path(&relative_path) {
-            continue;
-        }
+        copy_matching_worktree_include_entry(
+            source_root,
+            target_root,
+            &relative_path,
+            matcher,
+            source_filter,
+        )?;
+    }
+    Ok(())
+}
 
-        let source_path = source_root.join(&relative_path);
-        let metadata = std::fs::symlink_metadata(&source_path)
-            .with_context(|| format!("failed to inspect {}", source_path.display()))?;
-        let file_type = metadata.file_type();
-        if file_type.is_symlink() {
-            // Avoid following or recreating links whose target may escape either checkout.
-            continue;
-        }
+fn copy_matching_worktree_include_entry(
+    source_root: &Path,
+    target_root: &Path,
+    relative_path: &Path,
+    matcher: &WorktreeIncludeMatcher,
+    source_filter: &WorktreeIncludeSourceFilter,
+) -> Result<()> {
+    if is_forbidden_worktree_include_path(relative_path) {
+        return Ok(());
+    }
 
-        if file_type.is_dir() {
-            if matcher.is_match(&relative_path) && source_filter.allows_directory(&relative_path) {
-                create_worktree_include_target_dir(target_root, &relative_path)?;
-            }
-            copy_matching_worktree_include_entries(
+    let source_path = source_root.join(relative_path);
+    let metadata = match std::fs::symlink_metadata(&source_path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed to inspect {}", source_path.display()));
+        }
+    };
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        // Avoid following or recreating links whose target may escape either checkout.
+        return Ok(());
+    }
+
+    if file_type.is_dir() {
+        let directory_allowed = source_filter.allows_directory(relative_path);
+        if matcher.is_match(relative_path) && directory_allowed {
+            create_worktree_include_target_dir(target_root, relative_path)?;
+        }
+        if directory_allowed && matcher.may_match_descendant(relative_path) {
+            copy_matching_worktree_include_directory_entries(
                 source_root,
                 target_root,
-                &relative_path,
+                relative_path,
                 matcher,
                 source_filter,
             )?;
-        } else if file_type.is_file()
-            && matcher.is_match(&relative_path)
-            && source_filter.allows_file(&relative_path)
-        {
-            copy_worktree_include_file(source_root, target_root, &relative_path)?;
         }
+    } else if file_type.is_file()
+        && matcher.is_match(relative_path)
+        && source_filter.allows_file(relative_path)
+    {
+        copy_worktree_include_file(source_root, target_root, relative_path)?;
     }
+
     Ok(())
 }
 
@@ -544,6 +683,9 @@ fn copy_worktree_include_file(
 ) -> Result<()> {
     let source_path = source_root.join(relative_path);
     let target_path = safe_worktree_include_target_path(target_root, relative_path)?;
+    let source_permissions = std::fs::metadata(&source_path)
+        .with_context(|| format!("failed to inspect {}", source_path.display()))?
+        .permissions();
     if let Some(parent) = relative_path.parent()
         && !parent.as_os_str().is_empty()
     {
@@ -552,11 +694,17 @@ fn copy_worktree_include_file(
 
     let mut source = File::open(&source_path)
         .with_context(|| format!("failed to open {}", source_path.display()))?;
-    let mut target = match OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&target_path)
+    let mut target_options = OpenOptions::new();
+    target_options.write(true).create_new(true);
+    #[cfg(unix)]
     {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::PermissionsExt;
+
+        target_options.mode(source_permissions.mode());
+    }
+
+    let mut target = match target_options.open(&target_path) {
         Ok(target) => target,
         Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {
             safe_worktree_include_target_path(target_root, relative_path)?;
@@ -573,6 +721,8 @@ fn copy_worktree_include_file(
             target_path.display()
         )
     })?;
+    std::fs::set_permissions(&target_path, source_permissions)
+        .with_context(|| format!("failed to set permissions on {}", target_path.display()))?;
     Ok(())
 }
 
@@ -637,6 +787,113 @@ fn is_forbidden_worktree_include_path(relative_path: &Path) -> bool {
         }
         _ => false,
     }
+}
+
+fn codex_worktree_branch_name(worktree_name: &str) -> String {
+    format!("codex-worktree-{worktree_name}")
+}
+
+fn branch_cleanup_for_include_failure(repo_hint: &Path, branch: &str) -> BranchCleanup {
+    let output = Command::new("git")
+        .args([
+            "show-ref",
+            "--verify",
+            "--quiet",
+            &format!("refs/heads/{branch}"),
+        ])
+        .current_dir(repo_hint)
+        .output();
+    match output {
+        Ok(output) if output.status.success() => BranchCleanup::PreserveExistingBranch,
+        Ok(output) if output.status.code() == Some(1) => BranchCleanup::DeleteCreatedBranch,
+        Ok(_) | Err(_) => BranchCleanup::PreserveExistingBranch,
+    }
+}
+
+fn cleanup_created_worktree_after_include_failure(
+    prepared_worktree: &PreparedWorktree,
+    branch_cleanup: BranchCleanup,
+    include_error: anyhow::Error,
+) -> anyhow::Error {
+    match cleanup_created_worktree_after_include_failure_inner(prepared_worktree, branch_cleanup) {
+        Ok(()) => include_error.context(format!(
+            "failed to copy .worktreeinclude entries into newly created worktree {}; cleaned up the created worktree",
+            prepared_worktree.path.display()
+        )),
+        Err(cleanup_error) => include_error.context(format!(
+            "failed to copy .worktreeinclude entries into newly created worktree {}; additionally failed to clean up the created worktree: {cleanup_error:#}",
+            prepared_worktree.path.display()
+        )),
+    }
+}
+
+fn cleanup_created_worktree_after_include_failure_inner(
+    prepared_worktree: &PreparedWorktree,
+    branch_cleanup: BranchCleanup,
+) -> Result<()> {
+    let mut cleanup_errors = Vec::new();
+
+    if let Err(err) = run_git_cleanup_command(
+        &prepared_worktree.source_root,
+        [
+            OsStr::new("worktree"),
+            OsStr::new("remove"),
+            OsStr::new("--force"),
+            prepared_worktree.path.as_os_str(),
+        ],
+        "remove git worktree",
+    ) {
+        cleanup_errors.push(err);
+    }
+
+    match branch_cleanup {
+        BranchCleanup::DeleteCreatedBranch => {
+            if let Err(err) = run_git_cleanup_command(
+                &prepared_worktree.source_root,
+                [
+                    OsStr::new("branch"),
+                    OsStr::new("-D"),
+                    OsStr::new(prepared_worktree.branch.as_str()),
+                ],
+                "delete git worktree branch",
+            ) {
+                cleanup_errors.push(err);
+            }
+        }
+        BranchCleanup::PreserveExistingBranch => {}
+    }
+
+    if cleanup_errors.is_empty() {
+        Ok(())
+    } else {
+        let details = cleanup_errors
+            .into_iter()
+            .map(|err| format!("{err:#}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        bail!("{details}")
+    }
+}
+
+fn run_git_cleanup_command<I, S>(source_root: &Path, args: I, action: &str) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(source_root)
+        .output()
+        .with_context(|| format!("failed to {action} in {}", source_root.display()))?;
+    if !output.status.success() {
+        bail!(
+            "failed to {action} in {}: {}",
+            source_root.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -948,6 +1205,33 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn worktreeinclude_preserves_copied_file_mode() -> anyhow::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        let target_root = temp_dir.path().join("target");
+        fs::create_dir_all(&source_root)?;
+        fs::create_dir_all(&target_root)?;
+        fs::write(source_root.join(".worktreeinclude"), ".env\n")?;
+        fs::write(source_root.join(".env"), "secret")?;
+        fs::set_permissions(source_root.join(".env"), fs::Permissions::from_mode(0o600))?;
+
+        copy_worktree_include_files_allow_all(&prepared_worktree(
+            &source_root,
+            &target_root,
+            /*created*/ true,
+        ))?;
+
+        assert_eq!(
+            fs::metadata(target_root.join(".env"))?.permissions().mode() & 0o777,
+            0o600
+        );
+        Ok(())
+    }
+
     #[test]
     fn worktreeinclude_copies_directory_style_pattern_recursively() -> anyhow::Result<()> {
         let temp_dir = tempfile::tempdir()?;
@@ -1048,6 +1332,22 @@ mod tests {
     }
 
     #[test]
+    fn worktreeinclude_derives_literal_walk_roots() -> anyhow::Result<()> {
+        let matcher =
+            WorktreeIncludeMatcher::from_contents(".env\nconfig/*.local\n.codex/skills/\n")?;
+
+        assert_eq!(
+            matcher.walk_roots,
+            vec![
+                PathBuf::from(".env"),
+                PathBuf::from("config"),
+                PathBuf::from(".codex").join("skills"),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
     fn worktreeinclude_reused_worktree_is_not_mutated() -> anyhow::Result<()> {
         let temp_dir = tempfile::tempdir()?;
         let source_root = temp_dir.path().join("source");
@@ -1083,7 +1383,7 @@ mod tests {
         ))
         .expect_err("traversal pattern should be rejected");
 
-        assert!(err.to_string().contains("unsafe .worktreeinclude pattern"));
+        assert!(format!("{err:#}").contains("unsafe .worktreeinclude pattern"));
         Ok(())
     }
 
@@ -1186,6 +1486,38 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn prepare_launch_worktree_cleans_up_created_worktree_after_include_failure()
+    -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let source_root = temp_dir.path().join("source");
+        fs::create_dir_all(&source_root)?;
+        run_git(&source_root, ["init", "-q"])?;
+        run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
+        run_git(&source_root, ["config", "user.name", "Codex"])?;
+        fs::write(source_root.join(".worktreeinclude"), "../outside\n")?;
+        run_git(&source_root, ["add", ".worktreeinclude"])?;
+        run_git(&source_root, ["commit", "-qm", "init"])?;
+
+        let err =
+            prepare_launch_worktree(&source_root, Some("include-failure"), WorktreeBaseRef::Head)
+                .expect_err("invalid include should fail launch preparation");
+
+        assert!(format!("{err:#}").contains("unsafe .worktreeinclude pattern"));
+        assert!(
+            !source_root
+                .join(".codex")
+                .join("worktrees")
+                .join("include-failure")
+                .exists()
+        );
+        assert!(!git_branch_exists(
+            &source_root,
+            "codex-worktree-include-failure"
+        )?);
+        Ok(())
+    }
+
     fn prepared_worktree(
         source_root: &Path,
         target_root: &Path,
@@ -1223,5 +1555,18 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    fn git_branch_exists(cwd: &Path, branch: &str) -> anyhow::Result<bool> {
+        let output = Command::new("git")
+            .args([
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .current_dir(cwd)
+            .output()?;
+        Ok(output.status.success())
     }
 }
