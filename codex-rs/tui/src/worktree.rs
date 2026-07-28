@@ -529,8 +529,10 @@ mod tests {
         run_git(&source_root, ["config", "user.email", "codex@example.com"])?;
         run_git(&source_root, ["config", "user.name", "Codex"])?;
         fs::write(source_root.join("README.md"), "test\n")?;
-        run_git(&source_root, ["add", "README.md"])?;
+        fs::write(source_subdir.join("tracked.txt"), "test\n")?;
+        run_git(&source_root, ["add", "README.md", "subdir/tracked.txt"])?;
         run_git(&source_root, ["commit", "-qm", "init"])?;
+        let source_subdir = source_subdir.canonicalize()?;
 
         let prepared_worktree =
             prepare_launch_worktree(&source_subdir, Some("task"), WorktreeBaseRef::Head)?
@@ -543,9 +545,15 @@ mod tests {
 
         assert_eq!(
             prepared_worktree.path,
-            source_root.join(".codex").join("worktrees").join("task")
+            prepared_worktree
+                .source_root
+                .join(".codex")
+                .join("worktrees")
+                .join("task")
         );
-        assert_eq!(cwd_override, Some(prepared_worktree.path.join("subdir")));
+        let expected_cwd = prepared_worktree.path.join("subdir");
+        assert_eq!(cwd_override, Some(expected_cwd.clone()));
+        assert!(expected_cwd.join("tracked.txt").exists());
         Ok(())
     }
 
