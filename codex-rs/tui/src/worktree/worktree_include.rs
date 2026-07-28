@@ -78,8 +78,10 @@ fn worktree_include_matcher(
 struct WorktreeIncludeMatcher {
     globset: GlobSet,
     walk_roots: Vec<PathBuf>,
+    git_status_pathspecs: Vec<PathBuf>,
     directory_roots: Vec<PathBuf>,
     descend_from_root: bool,
+    descend_into_matching_root_dirs: bool,
 }
 
 enum WorktreeIncludeSourceFilter {
@@ -206,8 +208,10 @@ impl WorktreeIncludeMatcher {
     fn from_contents(contents: &str) -> Result<Self> {
         let mut builder = GlobSetBuilder::new();
         let mut walk_roots = Vec::new();
+        let mut git_status_pathspecs = Vec::new();
         let mut directory_roots = Vec::new();
         let mut descend_from_root = false;
+        let mut descend_into_matching_root_dirs = false;
 
         for (line_index, line) in contents.lines().enumerate() {
             let line_number = line_index + 1;
@@ -219,11 +223,23 @@ impl WorktreeIncludeMatcher {
             validate_worktree_include_pattern(pattern, line_number)?;
             add_worktree_include_pattern(&mut builder, pattern, line_number)?;
             add_worktree_include_walk_root(&mut walk_roots, pattern);
+            add_worktree_include_git_status_pathspec(&mut git_status_pathspecs, pattern);
             add_worktree_include_directory_root(&mut directory_roots, pattern);
-            if worktree_include_walk_root(pattern).as_os_str().is_empty()
-                && pattern.trim_end_matches('/').contains('/')
-            {
+            let walk_root = worktree_include_walk_root(pattern);
+            let root_pattern = walk_root.as_os_str().is_empty();
+            let directory_pattern = pattern.ends_with('/');
+            if root_pattern && pattern.trim_end_matches('/').contains('/') {
                 descend_from_root = true;
+            } else if root_pattern && directory_pattern {
+                descend_into_matching_root_dirs = true;
+            }
+            if descend_from_root
+                && git_status_pathspecs
+                    .last()
+                    .is_some_and(|pathspec| pathspec != Path::new("."))
+            {
+                git_status_pathspecs.clear();
+                git_status_pathspecs.push(PathBuf::from("."));
             }
         }
 
@@ -232,8 +248,10 @@ impl WorktreeIncludeMatcher {
                 .build()
                 .context("failed to build .worktreeinclude matcher")?,
             walk_roots,
+            git_status_pathspecs,
             directory_roots,
             descend_from_root,
+            descend_into_matching_root_dirs,
         })
     }
 
@@ -250,6 +268,7 @@ impl WorktreeIncludeMatcher {
             || self.walk_roots.iter().any(|root| {
                 if root.as_os_str().is_empty() {
                     self.descend_from_root
+                        || self.descend_into_matching_root_dirs && self.is_match(relative_path)
                 } else {
                     root.starts_with(relative_path) || relative_path.starts_with(root)
                 }
@@ -257,15 +276,7 @@ impl WorktreeIncludeMatcher {
     }
 
     fn git_status_pathspecs(&self) -> Vec<PathBuf> {
-        if self
-            .walk_roots
-            .iter()
-            .any(|root| root.as_os_str().is_empty())
-        {
-            vec![PathBuf::from(".")]
-        } else {
-            self.walk_roots.clone()
-        }
+        self.git_status_pathspecs.clone()
     }
 }
 
@@ -323,6 +334,34 @@ fn add_glob(builder: &mut GlobSetBuilder, pattern: &str, line_number: usize) -> 
 fn add_worktree_include_walk_root(roots: &mut Vec<PathBuf>, pattern: &str) {
     let root = worktree_include_walk_root(pattern);
     add_worktree_include_root(roots, root);
+}
+
+fn add_worktree_include_git_status_pathspec(pathspecs: &mut Vec<PathBuf>, pattern: &str) {
+    if pathspecs.iter().any(|pathspec| pathspec == Path::new(".")) {
+        return;
+    }
+
+    let directory_pattern = pattern.ends_with('/');
+    let pattern = pattern.trim_end_matches('/');
+    let root = worktree_include_walk_root(pattern);
+    let pathspec = if !root.as_os_str().is_empty() {
+        root
+    } else if pattern.contains('/') {
+        PathBuf::from(".")
+    } else if directory_pattern && path_contains_glob_meta(Path::new(pattern)) {
+        PathBuf::from(format!(":(top,glob){pattern}/**"))
+    } else if path_contains_glob_meta(Path::new(pattern)) {
+        PathBuf::from(format!(":(top,glob){pattern}"))
+    } else {
+        PathBuf::from(pattern)
+    };
+
+    if pathspec == Path::new(".") {
+        pathspecs.clear();
+        pathspecs.push(pathspec);
+    } else {
+        add_worktree_include_root(pathspecs, pathspec);
+    }
 }
 
 fn add_worktree_include_directory_root(roots: &mut Vec<PathBuf>, pattern: &str) {

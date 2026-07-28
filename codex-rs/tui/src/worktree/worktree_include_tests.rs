@@ -126,6 +126,32 @@ fn worktreeinclude_copies_directory_style_pattern_recursively() -> anyhow::Resul
 }
 
 #[test]
+fn worktreeinclude_copies_root_level_directory_glob_recursively() -> anyhow::Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let source_root = temp_dir.path().join("source");
+    let target_root = temp_dir.path().join("target");
+    fs::create_dir_all(source_root.join("cache-a"))?;
+    fs::create_dir_all(source_root.join("other-cache"))?;
+    fs::create_dir_all(&target_root)?;
+    fs::write(source_root.join(".worktreeinclude"), "cache-*/\n")?;
+    fs::write(source_root.join("cache-a").join("file.txt"), "cache")?;
+    fs::write(source_root.join("other-cache").join("file.txt"), "other")?;
+
+    copy_worktree_include_files_allow_all(&prepared_worktree(
+        &source_root,
+        &target_root,
+        /*created*/ true,
+    ))?;
+
+    assert_eq!(
+        fs::read_to_string(target_root.join("cache-a").join("file.txt"))?,
+        "cache"
+    );
+    assert!(!target_root.join("other-cache").exists());
+    Ok(())
+}
+
+#[test]
 fn worktreeinclude_ignores_comments_and_blank_lines() -> anyhow::Result<()> {
     let temp_dir = tempfile::tempdir()?;
     let source_root = temp_dir.path().join("source");
@@ -290,6 +316,11 @@ fn worktreeinclude_derives_git_status_pathspecs_from_walk_roots() -> anyhow::Res
     assert_eq!(
         root_wide_matcher.git_status_pathspecs(),
         vec![PathBuf::from(".")]
+    );
+    let root_glob_matcher = WorktreeIncludeMatcher::from_contents(".env.*\n")?;
+    assert_eq!(
+        root_glob_matcher.git_status_pathspecs(),
+        vec![PathBuf::from(":(top,glob).env.*")]
     );
     Ok(())
 }
