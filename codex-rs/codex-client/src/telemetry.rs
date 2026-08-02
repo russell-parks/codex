@@ -10,5 +10,7 @@ pub trait RequestTelemetry: Send + Sync {
         status: Option<StatusCode>,
         error: Option<&TransportError>,
         duration: Duration,
+        request_body_bytes: Option<u64>,
+        response_body_bytes: Option<u64>,
     );
 }

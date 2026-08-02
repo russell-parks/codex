@@ -307,6 +307,10 @@ impl LoadedAgentsMd {
                 .all(|entry| entry.contents.trim().is_empty())
     }
 
+    pub(crate) fn user_instructions(&self) -> Option<&UserInstructions> {
+        self.user_instructions.as_ref()
+    }
+
     /// Returns the concatenated model-visible instruction text.
     pub fn text(&self) -> String {
         if self.has_multiple_project_environments() {

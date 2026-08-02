@@ -42,6 +42,8 @@ codex-features = { workspace = true }
 codex-feedback = { workspace = true }
 codex-file-system = { workspace = true }
 codex-login = { workspace = true }
+codex-local-telemetry = { workspace = true }
+codex-local-telemetry-extension = { workspace = true }
 codex-memories-read = { workspace = true }
 codex-mcp = { workspace = true }
 codex-model-provider-info = { workspace = true }

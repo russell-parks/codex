@@ -496,7 +496,17 @@ async fn process_sse_with_treatment(
     telemetry: Option<Arc<dyn SseTelemetry>>,
     safety_buffering_treatment: SafetyBufferingTreatment,
 ) {
-    let mut stream = stream.eventsource();
+    let chunk_telemetry = telemetry.clone();
+    let mut stream = stream
+        .map(move |result| {
+            if let Ok(bytes) = &result
+                && let Some(telemetry) = chunk_telemetry.as_ref()
+            {
+                telemetry.on_sse_bytes(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+            }
+            result
+        })
+        .eventsource();
     let mut response_error: Option<ApiError> = None;
     let mut last_server_model: Option<String> = None;
 

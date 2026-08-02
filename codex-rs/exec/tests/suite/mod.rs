@@ -15,3 +15,4 @@ mod prompt_stdin;
 mod resume;
 mod sandbox;
 mod server_error_exit;
+mod telemetry;
