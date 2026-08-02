@@ -309,7 +309,11 @@ impl MessageProcessor {
         thread_manager
             .plugins_manager()
             .set_analytics_events_client(analytics_events_client.clone());
-        let skills_watcher = SkillsWatcher::new(thread_manager.skills_service(), outgoing.clone());
+        let skills_watcher = SkillsWatcher::new(
+            thread_manager.skills_service(),
+            &config.codex_home,
+            outgoing.clone(),
+        );
 
         let pending_thread_unloads = Arc::new(Mutex::new(HashSet::new()));
         let thread_watch_manager =
@@ -1110,6 +1114,21 @@ impl MessageProcessor {
             ClientRequest::ThreadMetadataUpdate { params, .. } => {
                 self.thread_processor.thread_metadata_update(params).await
             }
+            ClientRequest::ThreadSectionMove { params, .. } => {
+                self.thread_processor.thread_section_move(params).await
+            }
+            ClientRequest::ThreadSectionList { params, .. } => {
+                self.thread_processor.thread_section_list(params).await
+            }
+            ClientRequest::ThreadSectionCreate { params, .. } => {
+                self.thread_processor.thread_section_create(params).await
+            }
+            ClientRequest::ThreadSectionUpdate { params, .. } => {
+                self.thread_processor.thread_section_update(params).await
+            }
+            ClientRequest::ThreadSectionDelete { params, .. } => {
+                self.thread_processor.thread_section_delete(params).await
+            }
             ClientRequest::ThreadSettingsUpdate { params, .. } => {
                 self.turn_processor
                     .thread_settings_update(&request_id, params)
@@ -1205,6 +1224,9 @@ impl MessageProcessor {
             }
             ClientRequest::PluginList { params, .. } => {
                 self.plugin_processor.plugin_list(params).await
+            }
+            ClientRequest::PluginSearch { params, .. } => {
+                self.plugin_processor.plugin_search(params).await
             }
             ClientRequest::PluginInstalled { params, .. } => {
                 self.plugin_processor.plugin_installed(params).await
