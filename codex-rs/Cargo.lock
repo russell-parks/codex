@@ -4294,6 +4294,7 @@ dependencies = [
  "dirs",
  "dunce",
  "futures",
+ "globset",
  "http 1.4.0",
  "image",
  "insta",

@@ -53,6 +53,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
 use codex_config::types::UriBasedFileOpener;
 use codex_config::types::WindowsSandboxModeToml;
+use codex_config::types::WorktreeBaseRef;
 use codex_core_plugins::PluginLoadOutcome;
 use codex_core_plugins::PluginsConfigInput;
 use codex_exec_server::ExecutorFileSystem;
@@ -788,6 +789,9 @@ pub struct Config {
     /// Working directory to use when resuming or forking a session.
     /// When unset, prompt if the current and session directories differ.
     pub tui_resume_cwd: Option<ResumeCwdMode>,
+
+    /// Git reference used as the base for new Codex-managed worktrees.
+    pub worktree_base_ref: WorktreeBaseRef,
 
     /// Terminal resize-reflow tuning knobs.
     pub terminal_resize_reflow: TerminalResizeReflowConfig,
@@ -4238,6 +4242,7 @@ impl Config {
                 .and_then(|t| t.session_picker_view)
                 .unwrap_or_default(),
             tui_resume_cwd: cfg.tui.as_ref().and_then(|t| t.resume_cwd),
+            worktree_base_ref: cfg.worktree.base_ref,
             terminal_resize_reflow,
             tui_keymap: cfg
                 .tui

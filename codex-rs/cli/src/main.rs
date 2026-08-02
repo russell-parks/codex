@@ -30,6 +30,7 @@ use codex_state::StateRuntime;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
+use codex_tui::LocalStateDbStartupError;
 use codex_tui::UpdateAction;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_cli::CliConfigOverrides;
@@ -56,6 +57,7 @@ mod remote_control_cmd;
 #[cfg(target_os = "windows")]
 mod sandbox_setup;
 mod state_db_recovery;
+mod worktree;
 #[cfg(not(windows))]
 mod wsl_paths;
 
@@ -2392,7 +2394,10 @@ async fn run_interactive_tui(
     let mut attempted_backups = HashSet::new();
     loop {
         let err = match start_tui().await {
-            Ok(exit_info) => return Ok(exit_info),
+            Ok(exit_info) => {
+                worktree::cleanup_worktree_on_exit(exit_info.worktree_cleanup.as_ref());
+                return Ok(exit_info);
+            }
             Err(err) => err,
         };
         let Some(startup_error) = local_state_db::startup_error(&err) else {
@@ -2400,14 +2405,17 @@ async fn run_interactive_tui(
         };
         if local_state_db::is_locked(startup_error.detail()) {
             local_state_db::print_locked_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !local_state_db::is_auto_backup_recoverable(startup_error) {
             local_state_db::print_diagnostic_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
         if !attempted_backups.insert(startup_error.database_path().to_path_buf()) {
             local_state_db::print_diagnostic_guidance(startup_error);
+            cleanup_startup_error_worktree(startup_error);
             return Ok(AppExitInfo::fatal(startup_error.to_string()));
         }
 
@@ -2416,12 +2424,18 @@ async fn run_interactive_tui(
             Ok(backups) => local_state_db::confirm_fresh_start_rebuild(startup_error, &backups)?,
             Err(backup_err) => {
                 local_state_db::print_diagnostic_guidance(startup_error);
+                cleanup_startup_error_worktree(startup_error);
                 return Ok(AppExitInfo::fatal(format!(
                     "failed to move damaged Codex local database files into a backup folder automatically: {backup_err}"
                 )));
             }
         }
+        cleanup_startup_error_worktree(startup_error);
     }
+}
+
+fn cleanup_startup_error_worktree(startup_error: &LocalStateDbStartupError) {
+    worktree::cleanup_worktree_on_exit(worktree::startup_retry_cleanup_worktree(startup_error));
 }
 
 fn resolve_remote_endpoint(
@@ -2572,6 +2586,7 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
         strict_config,
         approval_policy,
         web_search,
+        worktree,
         prompt,
         mut config_overrides,
         ..
@@ -2593,6 +2608,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     }
     if strict_config {
         interactive.strict_config = true;
+    }
+    if let Some(worktree) = worktree {
+        interactive.worktree = Some(worktree);
     }
     if let Some(prompt) = prompt {
         // Normalize CRLF/CR to LF so CLI-provided text can't leak `\r` into TUI state.
@@ -2878,6 +2896,95 @@ mod tests {
 
         assert!(cli.subcommand.is_none());
         assert_eq!(cli.interactive.prompt.as_deref(), Some("import"));
+    }
+
+    #[test]
+    fn interactive_worktree_flag_is_absent_by_default() {
+        let cli = MultitoolCli::try_parse_from(["codex"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_missing_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_missing_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "my-task"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree", "my-task"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_treats_following_token_as_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("PROMPT"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_treats_following_token_as_name() {
+        let cli = MultitoolCli::try_parse_from(["codex", "--worktree", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("PROMPT"));
+        assert_eq!(cli.interactive.prompt, None);
+    }
+
+    #[test]
+    fn interactive_worktree_short_flag_accepts_prompt_after_option_terminator() {
+        let cli = MultitoolCli::try_parse_from(["codex", "-w", "--", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
+    }
+
+    #[test]
+    fn interactive_worktree_long_flag_accepts_prompt_after_option_terminator() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--worktree", "--", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some(""));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
+    }
+
+    #[test]
+    fn interactive_worktree_long_equals_keeps_following_token_as_prompt() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "--worktree=my-task", "PROMPT"]).expect("parse");
+
+        assert!(cli.subcommand.is_none());
+        assert_eq!(cli.interactive.worktree.as_deref(), Some("my-task"));
+        assert_eq!(cli.interactive.prompt.as_deref(), Some("PROMPT"));
     }
 
     #[test]
@@ -3430,6 +3537,7 @@ mod tests {
             thread_id,
             resume_hint: codex_utils_cli::resume_hint(thread_name, thread_id),
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::UserRequested,
         }
     }
@@ -3441,6 +3549,7 @@ mod tests {
             thread_id: None,
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::UserRequested,
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
@@ -3454,6 +3563,7 @@ mod tests {
             thread_id: Some(ThreadId::from_string("123e4567-e89b-12d3-a456-426614174000").unwrap()),
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::Fatal("boom".to_string()),
         };
         let lines = format_exit_messages(exit_info, /*color_enabled*/ false);
@@ -3700,6 +3810,17 @@ mod tests {
     }
 
     #[test]
+    fn resume_merges_worktree_flag() {
+        let interactive =
+            finalize_resume_from_args(["codex", "resume", "--worktree", "resume-task"].as_ref());
+
+        assert_eq!(interactive.worktree.as_deref(), Some("resume-task"));
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
     fn fork_picker_logic_none_and_not_last() {
         let interactive = finalize_fork_from_args(["codex", "fork"].as_ref());
         assert!(interactive.fork_picker);
@@ -3765,6 +3886,17 @@ mod tests {
         let interactive = finalize_fork_from_args(["codex", "fork", "--all"].as_ref());
         assert!(interactive.fork_picker);
         assert!(interactive.fork_show_all);
+    }
+
+    #[test]
+    fn fork_merges_worktree_flag() {
+        let interactive =
+            finalize_fork_from_args(["codex", "fork", "--worktree", "fork-task"].as_ref());
+
+        assert_eq!(interactive.worktree.as_deref(), Some("fork-task"));
+        assert!(interactive.fork_picker);
+        assert!(!interactive.fork_last);
+        assert_eq!(interactive.fork_session_id, None);
     }
 
     #[test]

@@ -67,6 +67,7 @@ use codex_config::types::TuiNotificationSettings;
 use codex_config::types::TuiPetAnchor;
 use codex_config::types::WindowsSandboxModeToml;
 use codex_config::types::WindowsToml;
+use codex_config::types::WorktreeBaseRef;
 use codex_core_plugins::PluginsManager;
 use codex_exec_server::LOCAL_FS;
 use codex_features::Feature;
@@ -1115,10 +1116,44 @@ async fn runtime_config_defaults_model_availability_nux() {
     );
 }
 
+#[tokio::test]
+async fn runtime_config_defaults_worktree_base_ref_to_fresh() {
+    let cfg = Config::load_from_base_config_with_overrides(
+        ConfigToml::default(),
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(WorktreeBaseRef::Fresh, cfg.worktree_base_ref);
+}
+
+#[tokio::test]
+async fn runtime_config_uses_configured_worktree_base_ref() {
+    let cfg_toml: ConfigToml = toml::from_str(
+        r#"
+[worktree]
+base_ref = "head"
+"#,
+    )
+    .expect("TOML deserialization should succeed for worktree config");
+
+    let cfg = Config::load_from_base_config_with_overrides(
+        cfg_toml,
+        ConfigOverrides::default(),
+        tempdir().expect("tempdir").abs(),
+    )
+    .await
+    .expect("load config");
+
+    assert_eq!(WorktreeBaseRef::Head, cfg.worktree_base_ref);
+}
+
 #[test]
 fn test_tui_vim_mode_default_defaults_to_false() {
     let toml = r#"
-        [tui]
+[tui]
     "#;
     let parsed: ConfigToml = toml::from_str(toml).expect("deserialize empty [tui] table");
     assert!(
