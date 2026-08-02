@@ -190,6 +190,7 @@ async fn read_account(mcp: &mut TestAppServer) -> Result<GetAccountResponse> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await?
@@ -312,6 +313,7 @@ async fn logout_account_removes_auth_and_notifies() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let account: GetAccountResponse =
@@ -410,6 +412,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let account: GetAccountResponse =
@@ -432,6 +435,7 @@ async fn set_auth_token_updates_account_and_notifies() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let account: GetAccountResponse =
@@ -486,6 +490,7 @@ async fn account_read_refresh_token_is_noop_in_external_mode() -> Result<()> {
     let get_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: true,
+            reload_auth_from_storage: false,
         })
         .await?;
     let account: GetAccountResponse =
@@ -2321,6 +2326,7 @@ async fn get_account_no_auth() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -2357,6 +2363,7 @@ async fn get_account_with_api_key() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -2390,6 +2397,7 @@ async fn get_account_when_auth_not_required() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -2430,6 +2438,7 @@ region = "us-west-2"
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -2570,6 +2579,7 @@ async fn get_account_with_managed_bedrock_provider() -> Result<()> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let received: GetAccountResponse =
@@ -2614,6 +2624,7 @@ async fn get_account_with_chatgpt() -> Result<()> {
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 
@@ -2703,6 +2714,7 @@ async fn get_account_with_chatgpt_without_email() -> Result<()> {
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let received: GetAccountResponse =
@@ -2783,6 +2795,7 @@ async fn get_account_omits_chatgpt_after_permanent_refresh_failure() -> Result<(
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
 
@@ -2825,6 +2838,7 @@ async fn get_account_with_chatgpt_missing_plan_claim_returns_unknown() -> Result
 
     let params = GetAccountParams {
         refresh_token: false,
+        reload_auth_from_storage: false,
     };
     let request_id = mcp.send_get_account_request(params).await?;
 

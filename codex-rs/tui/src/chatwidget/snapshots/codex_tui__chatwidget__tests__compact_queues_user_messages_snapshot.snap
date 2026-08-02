@@ -10,12 +10,12 @@ expression: normalize_snapshot_paths(term.backend().vt100().screen().contents())
 
 
 
-
-
 • Working (0s • esc to interrupt)
 
 • Messages to be submitted at end of turn
   ↳ Steer submitted while /compact was running.
+   gpt-5.6-sol default │  /tmp/project │ API key
+
 
 › Ask Codex to do anything
 
