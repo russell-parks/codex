@@ -26,6 +26,14 @@ features:
     status: active
     order: 10
 
+  - id: codex-cli-worktree-mode
+    branch: feat/codex-cli-worktree-mode
+    description: >
+      Adds CLI worktree mode as an upstream-intended feature kept
+      as close to main as the downstream stack allows.
+    status: active
+    order: 15
+
   - id: auth-reload-and-tui-recovery
     branch: feat/auth-reload-and-tui-recovery
     description: >
