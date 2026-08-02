@@ -101,6 +101,23 @@ impl ResumeCwdMode {
     }
 }
 
+/// Git reference used as the base for new Codex-managed worktrees.
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorktreeBaseRef {
+    #[default]
+    Fresh,
+    Head,
+}
+
+/// Settings for Codex-managed worktrees.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub struct WorktreeConfigToml {
+    #[serde(default)]
+    pub base_ref: WorktreeBaseRef,
+}
+
 /// Determine where Codex should store CLI auth credentials.
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]

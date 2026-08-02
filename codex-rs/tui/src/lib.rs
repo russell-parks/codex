@@ -119,9 +119,6 @@ mod diff_render;
 mod exec_cell;
 mod exec_command;
 mod external_agent_config_migration;
-mod external_agent_config_migration_flow;
-mod external_agent_config_migration_model;
-mod external_agent_config_migration_source;
 mod external_editor;
 mod file_search;
 mod frames;
@@ -208,6 +205,7 @@ mod width;
 mod windows_sandbox;
 mod workspace_command;
 mod workspace_messages;
+mod worktree;
 
 mod wrapping;
 
@@ -419,10 +417,6 @@ async fn connect_remote_app_server(
 #[cfg(unix)]
 async fn maybe_probe_default_daemon_socket(codex_home: &Path) -> Option<AbsolutePathBuf> {
     let socket_path = codex_app_server_client::app_server_control_socket_path(codex_home).ok()?;
-    if !socket_path.as_path().try_exists().unwrap_or(false) {
-        return None;
-    }
-
     match tokio::time::timeout(
         AUTO_CONNECT_DAEMON_CONNECT_TIMEOUT,
         tokio::net::UnixStream::connect(socket_path.as_path()),
@@ -633,7 +627,7 @@ async fn lookup_session_target_by_name_with_app_server(
                 model_providers: None,
                 source_kinds: Some(vec![ThreadSourceKind::Cli, ThreadSourceKind::VsCode]),
                 archived: Some(false),
-                is_pinned: None,
+                section_id: None,
                 parent_thread_id: None,
                 ancestor_thread_id: None,
                 cwd: None,
@@ -748,7 +742,7 @@ fn latest_session_lookup_params(
         },
         source_kinds: Some(resume_source_kinds(include_non_interactive)),
         archived: Some(false),
-        is_pinned: None,
+        section_id: None,
         parent_thread_id: None,
         ancestor_thread_id: None,
         cwd: cwd_filter.map(|cwd| ThreadListCwdFilter::One(cwd.to_string_lossy().to_string())),
@@ -910,6 +904,21 @@ fn can_reuse_implicit_local_daemon(
         && !has_non_replayable_launch_overrides
 }
 
+fn can_reuse_implicit_local_daemon_for_launch(
+    cli_kv_overrides: &[(String, toml::Value)],
+    loader_overrides: &LoaderOverrides,
+    strict_config: bool,
+    bypass_hook_trust: bool,
+    cli_worktree: Option<&str>,
+) -> bool {
+    can_reuse_implicit_local_daemon(
+        cli_kv_overrides,
+        loader_overrides,
+        strict_config,
+        bypass_hook_trust || cli_worktree.is_some(),
+    )
+}
+
 pub async fn run_main(
     mut cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -928,6 +937,14 @@ pub async fn run_main(
             cli.approval_policy.map(Into::into),
         )
     };
+    worktree::validate_starts_new_session(
+        cli.worktree.as_deref(),
+        worktree::WorktreeLaunchMode::from_cli(&cli),
+    )
+    .map_err(std::io::Error::other)?;
+
+    cli.shared
+        .take_auto_review_config_overrides(&mut cli.config_overrides);
 
     // Map the legacy --search flag to the canonical web_search mode.
     if cli.web_search {
@@ -967,11 +984,12 @@ pub async fn run_main(
         launch_loader_overrides.user_config_path = Some(user_config_path);
         launch_loader_overrides.user_config_profile = Some(profile_v2.clone());
     }
-    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon(
+    let reuse_implicit_local_daemon = can_reuse_implicit_local_daemon_for_launch(
         &cli_kv_overrides,
         &launch_loader_overrides,
         strict_config,
         cli.bypass_hook_trust,
+        cli.worktree.as_deref(),
     );
     let default_daemon = if explicit_remote_endpoint.is_none() && reuse_implicit_local_daemon {
         maybe_probe_default_daemon_socket(&codex_home).await
@@ -983,6 +1001,7 @@ pub async fn run_main(
         default_daemon,
         reuse_implicit_local_daemon,
     );
+    worktree::validate_app_server_target(cli.worktree.as_deref(), &app_server_target)?;
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -999,7 +1018,7 @@ pub async fn run_main(
             EnvironmentManager::prepare_from_env().await
         }
         .map_err(std::io::Error::other)?;
-    let cwd = cli.cwd.clone();
+    let mut cwd = cli.cwd.clone();
     let config_cwd = config_cwd_for_app_server_target(
         cwd.as_deref(),
         &app_server_target,
@@ -1049,10 +1068,37 @@ pub async fn run_main(
     )
     .await;
 
-    let cwd_override = if app_server_target.uses_remote_workspace() {
-        None
+    let source_cwd = config_cwd
+        .as_ref()
+        .map(|config_cwd| config_cwd.as_path().to_path_buf());
+    let worktree_cleanup = if let Some(local_cwd) = worktree::repo_hint_for_target(
+        cli.worktree.as_deref(),
+        &app_server_target,
+        config_cwd.as_ref(),
+    )? {
+        let prepared_worktree = worktree::prepare_launch_worktree(
+            local_cwd,
+            cli.worktree.as_deref(),
+            bootstrap_config_toml.worktree.base_ref,
+        )
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .ok_or_else(|| std::io::Error::other("worktree flag did not produce a worktree request"))?;
+        cwd = worktree::final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            source_cwd,
+            Some(&prepared_worktree),
+        );
+        cli.cwd = cwd.clone();
+        Some(prepared_worktree)
     } else {
-        cwd.clone()
+        None
+    };
+    let final_config_cwd = if worktree_cleanup.is_some() {
+        cwd.as_ref()
+            .map(AbsolutePathBuf::from_absolute_path)
+            .transpose()?
+    } else {
+        config_cwd.clone()
     };
 
     let mut manually_selected_oss_provider = None;
@@ -1064,7 +1110,7 @@ pub async fn run_main(
             // needs a default provider from config, reload with the bundle.
             bootstrap_config_with_cloud_config = load_bootstrap_config_or_exit(
                 &codex_home,
-                config_cwd.as_ref(),
+                final_config_cwd.as_ref(),
                 cli_kv_overrides.clone(),
                 loader_overrides.clone(),
                 strict_config,
@@ -1110,6 +1156,12 @@ pub async fn run_main(
     } else {
         None // No model specified, will use the default.
     };
+
+    let cwd_override = worktree::final_cwd_override_for_launch(
+        app_server_target.uses_remote_workspace(),
+        cwd.clone(),
+        /*prepared_worktree*/ None,
+    );
 
     let additional_dirs = cli.add_dir.clone();
 
@@ -1185,7 +1237,9 @@ pub async fn run_main(
             codex_rollout::sqlite_telemetry_recorder(metrics.clone(), otel_originator.as_str());
         let _ = codex_state::install_process_db_telemetry(telemetry);
     }
-    let state_db = init_state_db_for_app_server_target(&config, &app_server_target).await?;
+    let state_db = init_state_db_for_app_server_target(&config, &app_server_target)
+        .await
+        .map_err(|err| attach_worktree_cleanup_to_startup_error(err, worktree_cleanup.clone()))?;
     let config_toml_log_dir_configured = config
         .config_layer_stack
         .effective_config()
@@ -1320,9 +1374,33 @@ pub async fn run_main(
         log_db,
         state_db,
         environment_manager,
+        worktree_cleanup,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
+}
+
+fn attach_worktree_cleanup_to_startup_error(
+    err: std::io::Error,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
+) -> std::io::Error {
+    if err
+        .get_ref()
+        .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+        .is_none()
+    {
+        return err;
+    }
+
+    let Some(inner) = err.into_inner() else {
+        return std::io::Error::other("failed to unwrap local state db startup error");
+    };
+    match inner.downcast::<LocalStateDbStartupError>() {
+        Ok(startup_error) => {
+            std::io::Error::other(startup_error.with_worktree_cleanup(worktree_cleanup))
+        }
+        Err(err) => std::io::Error::other(err),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1342,11 +1420,12 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
     color_eyre::install()?;
 
-    tooltips::announcement::prewarm();
+    tooltips::announcement::prewarm(initial_config.http_client_factory());
 
     // Forward panic reports through tracing so they appear in the UI status
     // line, but do not swallow the default/color-eyre panic handler.
@@ -1382,6 +1461,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         resume_hint: None,
                         update_action: Some(action),
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1475,6 +1555,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1527,6 +1608,7 @@ async fn run_ratatui_app(
             thread_id: None,
             resume_hint: None,
             update_action: None,
+            worktree_cleanup: worktree_cleanup.clone(),
             exit_reason: ExitReason::Fatal(format!(
                 "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
             )),
@@ -1584,6 +1666,7 @@ async fn run_ratatui_app(
                         thread_id: None,
                         resume_hint: None,
                         update_action: None,
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1645,6 +1728,7 @@ async fn run_ratatui_app(
                     thread_id: None,
                     resume_hint: None,
                     update_action: None,
+                    worktree_cleanup: worktree_cleanup.clone(),
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1675,6 +1759,7 @@ async fn run_ratatui_app(
                 thread_id: None,
                 resume_hint: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1833,6 +1918,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        worktree_cleanup,
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,
@@ -2632,38 +2718,54 @@ mod tests {
         let mut loader_overrides = LoaderOverrides::default();
         let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
 
-        assert!(can_reuse_implicit_local_daemon(
+        assert!(can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &cli_kv_overrides,
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
         loader_overrides.ignore_user_config = true;
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &loader_overrides,
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ true,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ true,
+            /*bypass_hook_trust*/ true,
+            /*cli_worktree*/ None,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn can_reuse_implicit_local_daemon_rejects_worktree_launch() {
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+            /*bypass_hook_trust*/ false,
+            Some("task"),
+        ));
     }
 
     #[test]
@@ -3217,6 +3319,31 @@ mod tests {
             "error should preserve the embedded app server startup context"
         );
         Ok(())
+    }
+
+    #[test]
+    fn state_db_startup_error_can_carry_worktree_cleanup_metadata() {
+        let worktree_cleanup = codex_git_utils::worktree::PreparedWorktree {
+            source_root: PathBuf::from("/repo"),
+            path: PathBuf::from("/repo/.codex/worktrees/task"),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            branch_created: true,
+            generated_name: false,
+        };
+        let err = std::io::Error::other(LocalStateDbStartupError::new(
+            PathBuf::from("/repo/.codex/state.sqlite"),
+            "database disk image is malformed".to_string(),
+        ));
+
+        let err = attach_worktree_cleanup_to_startup_error(err, Some(worktree_cleanup.clone()));
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(startup_error.worktree_cleanup(), Some(&worktree_cleanup));
     }
 
     #[tokio::test]
