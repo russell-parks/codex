@@ -741,6 +741,7 @@ pub(crate) async fn apply_bespoke_event_handling(
                 turn_id: request.turn_id,
                 item_id: request.call_id,
                 questions,
+                is_blocking: request.is_blocking,
                 auto_resolution_ms: request.auto_resolution_ms,
             };
             let (pending_request_id, rx) = outgoing
@@ -2217,7 +2218,9 @@ mod tests {
             updated_at: created_at,
             recency_at: created_at,
             archived_at: None,
-            is_pinned: false,
+            section: None,
+            section_position: None,
+            section_entered_at: None,
             cwd: test_path_buf("/tmp").abs().into(),
             cli_version: "0.0.0".to_string(),
             source: SessionSource::Cli,
@@ -3432,6 +3435,7 @@ mod tests {
                         agent_path: AgentPath::try_from("/root/worker")
                             .expect("agent path should parse"),
                     }),
+                    started_at_ms: Some(42),
                     completed_at_ms: 42,
                 }),
             },
@@ -3606,6 +3610,7 @@ mod tests {
                         phase: None,
                         memory_citation: None,
                     }),
+                    started_at_ms: Some(0),
                     completed_at_ms: 0,
                 }),
             );
@@ -3622,6 +3627,7 @@ mod tests {
                         phase: None,
                         memory_citation: None,
                     }),
+                    started_at_ms: Some(0),
                     completed_at_ms: 0,
                 }),
             );
