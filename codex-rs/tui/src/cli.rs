@@ -65,6 +65,16 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Run the interactive session in a Codex-managed worktree.
+    #[arg(
+        long = "worktree",
+        short = 'w',
+        value_name = "NAME",
+        num_args = 0..=1,
+        default_missing_value = ""
+    )]
+    pub worktree: Option<String>,
+
     /// Disable alternate screen mode
     ///
     /// Runs the TUI in inline mode, preserving terminal scrollback history.
@@ -136,4 +146,5 @@ fn mark_tui_args(cmd: clap::Command) -> clap::Command {
     cmd.mut_arg("dangerously_bypass_approvals_and_sandbox", |arg| {
         arg.conflicts_with("approval_policy")
     })
+    .mut_arg("auto_review", |arg| arg.conflicts_with("approval_policy"))
 }
