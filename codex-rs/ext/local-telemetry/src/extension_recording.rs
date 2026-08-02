@@ -296,11 +296,17 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
         codex_protocol::account::PlanType::Pro => String::from("pro"),
         codex_protocol::account::PlanType::ProLite => String::from("pro_lite"),
         codex_protocol::account::PlanType::Team => String::from("team"),
+        codex_protocol::account::PlanType::SelfServeBusinessProLite => {
+            String::from("self_serve_business_prolite")
+        }
         codex_protocol::account::PlanType::SelfServeBusinessUsageBased => {
             String::from("self_serve_business_usage_based")
         }
         codex_protocol::account::PlanType::Business => String::from("business"),
         codex_protocol::account::PlanType::Ent26 => String::from("ent26"),
+        codex_protocol::account::PlanType::EnterpriseCbpAutomation => {
+            String::from("enterprise_cbp_automation")
+        }
         codex_protocol::account::PlanType::EnterpriseCbpUsageBased => {
             String::from("enterprise_cbp_usage_based")
         }
