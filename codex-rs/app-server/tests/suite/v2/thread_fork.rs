@@ -96,7 +96,7 @@ async fn list_threads(mcp: &mut TestAppServer) -> Result<ThreadListResponse> {
             model_providers: None,
             source_kinds: None,
             archived: None,
-            is_pinned: None,
+            section_id: None,
             cwd: None,
             use_state_db_only: false,
             search_term: None,
@@ -1395,6 +1395,7 @@ async fn assert_thread_fork_freezes_active_paginated_turn_as_interrupted(
                     text_elements: Vec::new(),
                 }],
             }),
+            started_at_ms: Some(0),
             completed_at_ms,
         }))
     };
