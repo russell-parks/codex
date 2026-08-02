@@ -4,6 +4,10 @@ upstream:
   remote: upstream
   branch: main
 
+path:
+  start: main
+  finish: integration/latest
+
 integration:
   branch: integration/latest
 
