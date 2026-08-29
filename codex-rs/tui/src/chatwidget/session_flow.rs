@@ -42,6 +42,7 @@ impl ChatWidget {
         if connector_scope_changed {
             self.invalidate_connector_scope();
         }
+        self.sync_status_header_git_status_poller();
         let runtime_workspace_roots = session.runtime_workspace_roots.clone();
         self.config.workspace_roots = runtime_workspace_roots.clone();
         self.config

@@ -4483,6 +4483,7 @@ dependencies = [
  "itertools 0.14.0",
  "lazy_static",
  "libc",
+ "notify",
  "pathdiff",
  "pretty_assertions",
  "pulldown-cmark",

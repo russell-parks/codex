@@ -251,6 +251,7 @@ async fn consume_timeout_releases_account_auth_queue() -> Result<()> {
     let account_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
 
