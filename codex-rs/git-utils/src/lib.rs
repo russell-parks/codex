@@ -9,6 +9,7 @@ mod operations;
 mod platform;
 mod status;
 mod trust;
+pub mod worktree;
 
 /// Git configuration that rejects implicitly discovered bare repositories while
 /// preserving repositories selected explicitly through `GIT_DIR` or `--git-dir`.

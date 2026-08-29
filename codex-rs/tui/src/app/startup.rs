@@ -97,6 +97,7 @@ impl App {
         app_server_target: AppServerTarget,
         state_db: Option<StateDbHandle>,
         environment_manager: Arc<EnvironmentManager>,
+        worktree_cleanup: Option<PreparedWorktree>,
         startup_elapsed_before_app: Duration,
         startup_bootstrap: Option<AppServerBootstrap>,
         startup_hooks_browser: Option<HooksListEntry>,
@@ -175,6 +176,7 @@ impl App {
             model.as_str(),
             &app_event_tx,
             &available_models,
+            worktree_cleanup.clone(),
         )
         .await?;
         if let Some(exit_info) = exit_info {

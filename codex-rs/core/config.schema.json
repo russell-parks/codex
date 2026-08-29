@@ -5610,6 +5610,29 @@
     },
     "WorkspaceRootsToml": {
       "type": "object"
+    },
+    "WorktreeBaseRef": {
+      "description": "Git reference used as the base for new Codex-managed worktrees.",
+      "enum": [
+        "fresh",
+        "head"
+      ],
+      "type": "string"
+    },
+    "WorktreeConfigToml": {
+      "additionalProperties": false,
+      "description": "Settings for Codex-managed worktrees.",
+      "properties": {
+        "base_ref": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/WorktreeBaseRef"
+            }
+          ],
+          "default": "fresh"
+        }
+      },
+      "type": "object"
     }
   },
   "description": "Base config deserialized from ~/.codex/config.toml.",
@@ -6676,6 +6699,17 @@
       ],
       "default": null,
       "description": "Windows-specific configuration."
+    },
+    "worktree": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/WorktreeConfigToml"
+        }
+      ],
+      "default": {
+        "base_ref": "fresh"
+      },
+      "description": "Defaults for Codex-managed worktrees."
     }
   },
   "title": "ConfigToml",

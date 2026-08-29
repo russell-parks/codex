@@ -64,6 +64,7 @@ impl App {
             ),
             disconnect_info,
             update_action: self.pending_update_action,
+            worktree_cleanup: None,
             exit_reason,
         }
     }

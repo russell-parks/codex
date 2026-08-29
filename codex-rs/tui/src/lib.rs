@@ -220,6 +220,7 @@ mod width;
 mod windows_sandbox;
 mod workspace_command;
 mod workspace_messages;
+mod worktree;
 
 mod wrapping;
 
@@ -933,6 +934,21 @@ fn restore_terminal_before_fatal_exit() {
     }
 }
 
+fn can_reuse_implicit_local_daemon_for_launch(
+    cli_kv_overrides: &[(String, toml::Value)],
+    loader_overrides: &LoaderOverrides,
+    strict_config: bool,
+    bypass_hook_trust: bool,
+    cli_worktree: Option<&str>,
+) -> bool {
+    can_reuse_implicit_local_daemon(
+        cli_kv_overrides,
+        loader_overrides,
+        strict_config,
+        bypass_hook_trust || cli_worktree.is_some(),
+    )
+}
+
 pub async fn run_main(
     cli: Cli,
     arg0_paths: Arg0DispatchPaths,
@@ -953,9 +969,33 @@ pub async fn run_main(
             resume_hint: None,
             disconnect_info: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::UserRequested,
         }),
         result => result,
+    }
+}
+
+fn attach_worktree_cleanup_to_startup_error(
+    err: std::io::Error,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
+) -> std::io::Error {
+    if err
+        .get_ref()
+        .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+        .is_none()
+    {
+        return err;
+    }
+
+    let Some(inner) = err.into_inner() else {
+        return std::io::Error::other("failed to unwrap local state db startup error");
+    };
+    match inner.downcast::<LocalStateDbStartupError>() {
+        Ok(startup_error) => {
+            std::io::Error::other(startup_error.with_worktree_cleanup(worktree_cleanup))
+        }
+        Err(err) => std::io::Error::other(err),
     }
 }
 
@@ -976,6 +1016,7 @@ async fn run_ratatui_app(
     log_db: Option<log_db::LogDbLayer>,
     state_db: Option<StateDbHandle>,
     environment_manager: Arc<EnvironmentManager>,
+    worktree_cleanup: Option<codex_git_utils::worktree::PreparedWorktree>,
     startup_draft: startup_draft::StartupDraft,
 ) -> color_eyre::Result<AppExitInfo> {
     let uses_remote_workspace = app_server_target.uses_remote_workspace();
@@ -1013,6 +1054,7 @@ async fn run_ratatui_app(
                         resume_hint: None,
                         disconnect_info: None,
                         update_action: Some(action),
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1189,6 +1231,7 @@ async fn run_ratatui_app(
                 resume_hint: None,
                 disconnect_info: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1262,6 +1305,7 @@ async fn run_ratatui_app(
                 resume_hint: None,
                 disconnect_info: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::Fatal(format!(
                     "No saved session found with ID {id_str}. Run `codex {action}` without an ID to choose from existing sessions."
                 )),
@@ -1358,6 +1402,7 @@ async fn run_ratatui_app(
                         resume_hint: None,
                         disconnect_info: None,
                         update_action: None,
+                        worktree_cleanup: worktree_cleanup.clone(),
                         exit_reason: ExitReason::UserRequested,
                     });
                 }
@@ -1453,6 +1498,7 @@ async fn run_ratatui_app(
                     resume_hint: None,
                     disconnect_info: None,
                     update_action: None,
+                    worktree_cleanup: worktree_cleanup.clone(),
                     exit_reason: ExitReason::UserRequested,
                 });
             }
@@ -1503,6 +1549,7 @@ async fn run_ratatui_app(
                 resume_hint: None,
                 disconnect_info: None,
                 update_action: None,
+                worktree_cleanup: worktree_cleanup.clone(),
                 exit_reason: ExitReason::UserRequested,
             });
         }
@@ -1734,6 +1781,7 @@ async fn run_ratatui_app(
         app_server_target,
         state_db,
         environment_manager,
+        worktree_cleanup,
         startup_elapsed_before_app,
         startup_bootstrap,
         startup_hooks_browser,
@@ -2665,38 +2713,54 @@ mod tests {
         let mut loader_overrides = LoaderOverrides::default();
         let cli_kv_overrides = vec![("web_search".to_string(), toml::Value::String("live".into()))];
 
-        assert!(can_reuse_implicit_local_daemon(
+        assert!(can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &cli_kv_overrides,
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
         loader_overrides.ignore_user_config = true;
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &loader_overrides,
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ true,
-            /*has_non_replayable_launch_overrides*/ false,
+            /*bypass_hook_trust*/ false,
+            /*cli_worktree*/ None,
         ));
-        assert!(!can_reuse_implicit_local_daemon(
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
             &[],
             &LoaderOverrides::default(),
             /*strict_config*/ false,
-            /*has_non_replayable_launch_overrides*/ true,
+            /*bypass_hook_trust*/ true,
+            /*cli_worktree*/ None,
         ));
         Ok(())
+    }
+
+    #[test]
+    fn can_reuse_implicit_local_daemon_rejects_worktree_launch() {
+        assert!(!can_reuse_implicit_local_daemon_for_launch(
+            &[],
+            &LoaderOverrides::default(),
+            /*strict_config*/ false,
+            /*bypass_hook_trust*/ false,
+            Some("task"),
+        ));
     }
 
     #[test]
@@ -3311,6 +3375,31 @@ mod tests {
             "error should preserve the embedded app server startup context"
         );
         Ok(())
+    }
+
+    #[test]
+    fn state_db_startup_error_can_carry_worktree_cleanup_metadata() {
+        let worktree_cleanup = codex_git_utils::worktree::PreparedWorktree {
+            source_root: PathBuf::from("/repo"),
+            path: PathBuf::from("/repo/.codex/worktrees/task"),
+            branch: "codex-worktree-task".to_string(),
+            base_ref: "HEAD".to_string(),
+            created: true,
+            branch_created: true,
+            generated_name: false,
+        };
+        let err = std::io::Error::other(LocalStateDbStartupError::new(
+            PathBuf::from("/repo/.codex/state.sqlite"),
+            "database disk image is malformed".to_string(),
+        ));
+
+        let err = attach_worktree_cleanup_to_startup_error(err, Some(worktree_cleanup.clone()));
+        let startup_error = err
+            .get_ref()
+            .and_then(|err| err.downcast_ref::<LocalStateDbStartupError>())
+            .expect("state db startup failure should retain its typed context");
+
+        assert_eq!(startup_error.worktree_cleanup(), Some(&worktree_cleanup));
     }
 
     #[tokio::test]

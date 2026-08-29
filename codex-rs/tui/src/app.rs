@@ -145,6 +145,7 @@ use codex_config::types::WindowsToml;
 use codex_exec_server::EnvironmentManager;
 use codex_features::Feature;
 use codex_features::FeaturesToml;
+use codex_git_utils::worktree::PreparedWorktree;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_models_manager::model_presets::HIDE_GPT_5_1_CODEX_MAX_MIGRATION_PROMPT_CONFIG;
@@ -423,6 +424,7 @@ pub struct AppExitInfo {
     pub resume_hint: Option<String>,
     pub disconnect_info: Option<DisconnectInfo>,
     pub update_action: Option<UpdateAction>,
+    pub worktree_cleanup: Option<PreparedWorktree>,
     pub exit_reason: ExitReason,
 }
 
@@ -434,6 +436,7 @@ impl AppExitInfo {
             resume_hint: None,
             disconnect_info: None,
             update_action: None,
+            worktree_cleanup: None,
             exit_reason: ExitReason::Fatal(message.into()),
         }
     }

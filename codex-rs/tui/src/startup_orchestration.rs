@@ -23,6 +23,11 @@ pub(super) async fn run_main_inner(
             cli.approval_policy.map(Into::into),
         )
     };
+    worktree::validate_starts_new_session(
+        cli.worktree.as_deref(),
+        worktree::WorktreeLaunchMode::from_cli(&cli),
+    )
+    .map_err(std::io::Error::other)?;
 
     cli.shared
         .take_auto_review_config_overrides(&mut cli.config_overrides);
@@ -137,11 +142,12 @@ pub(super) async fn run_main_inner(
 
     let reuse_implicit_local_daemon = !workload_identity_selected
         && (cli.agents_overview
-            || can_reuse_implicit_local_daemon(
+            || can_reuse_implicit_local_daemon_for_launch(
                 &cli_kv_overrides,
                 &launch_loader_overrides,
                 strict_config,
                 cli.bypass_hook_trust,
+                cli.worktree.as_deref(),
             ));
     let search_only_config_override = !workload_identity_selected
         && cli.web_search
@@ -188,6 +194,7 @@ pub(super) async fn run_main_inner(
         reuse_implicit_local_daemon,
         workload_identity_selected,
     )?;
+    worktree::validate_app_server_target(cli.worktree.as_deref(), &app_server_target)?;
     let remote_cwd_override = cli
         .cwd
         .clone()
@@ -208,7 +215,7 @@ pub(super) async fn run_main_inner(
                 .await?
         }
         .map_err(std::io::Error::other)?;
-    let cwd = cli.cwd.clone();
+    let mut cwd = cli.cwd.clone();
     let config_cwd = config_cwd_for_app_server_target(
         cwd.as_deref(),
         &app_server_target,
@@ -241,10 +248,37 @@ pub(super) async fn run_main_inner(
         ))
         .await??;
 
-    let cwd_override = if app_server_target.uses_remote_workspace() {
-        None
+    let source_cwd = config_cwd
+        .as_ref()
+        .map(|config_cwd| config_cwd.as_path().to_path_buf());
+    let worktree_cleanup = if let Some(local_cwd) = worktree::repo_hint_for_target(
+        cli.worktree.as_deref(),
+        &app_server_target,
+        config_cwd.as_ref(),
+    )? {
+        let prepared_worktree = worktree::prepare_launch_worktree(
+            local_cwd,
+            cli.worktree.as_deref(),
+            bootstrap_config_toml.worktree.base_ref,
+        )
+        .map_err(|err| std::io::Error::other(err.to_string()))?
+        .ok_or_else(|| std::io::Error::other("worktree flag did not produce a worktree request"))?;
+        cwd = worktree::final_cwd_override_for_launch(
+            /*uses_remote_workspace*/ false,
+            source_cwd,
+            Some(&prepared_worktree),
+        );
+        cli.cwd = cwd.clone();
+        Some(prepared_worktree)
     } else {
-        cwd.clone()
+        None
+    };
+    let final_config_cwd = if worktree_cleanup.is_some() {
+        cwd.as_ref()
+            .map(AbsolutePathBuf::from_absolute_path)
+            .transpose()?
+    } else {
+        config_cwd.clone()
     };
 
     let mut manually_selected_oss_provider = None;
@@ -257,7 +291,7 @@ pub(super) async fn run_main_inner(
             bootstrap_config_with_cloud_config = startup_draft
                 .run_until(load_bootstrap_config_or_exit(
                     &codex_home,
-                    config_cwd.as_ref(),
+                    final_config_cwd.as_ref(),
                     cli_kv_overrides.clone(),
                     loader_overrides.clone(),
                     strict_config,
@@ -321,6 +355,11 @@ pub(super) async fn run_main_inner(
     };
 
     let additional_dirs = cli.add_dir.clone();
+    let cwd_override = worktree::final_cwd_override_for_launch(
+        app_server_target.uses_remote_workspace(),
+        cwd.clone(),
+        /*prepared_worktree*/ None,
+    );
 
     let overrides = ConfigOverrides {
         model,
@@ -409,7 +448,8 @@ pub(super) async fn run_main_inner(
             &config,
             &app_server_target,
         ))
-        .await??;
+        .await?
+        .map_err(|err| attach_worktree_cleanup_to_startup_error(err, worktree_cleanup.clone()))?;
     let config_toml_log_dir_configured = config
         .config_layer_stack
         .effective_config()
@@ -544,6 +584,7 @@ pub(super) async fn run_main_inner(
         log_db,
         state_db,
         environment_manager,
+        worktree_cleanup,
         startup_draft,
     )
     .await
