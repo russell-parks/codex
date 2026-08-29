@@ -2594,11 +2594,13 @@ impl AuthManager {
     }
 
     async fn load_auth_from_storage(&self) -> std::io::Result<Option<CodexAuth>> {
+        let allowed_login_methods = self.allowed_login_methods();
         let forced_chatgpt_workspace_id = self.forced_chatgpt_workspace_id();
         load_auth(
             &self.codex_home,
             self.enable_codex_api_key_env,
             self.auth_credentials_store_mode,
+            Some(&allowed_login_methods),
             forced_chatgpt_workspace_id.as_deref(),
             self.chatgpt_base_url.as_deref(),
             self.keyring_backend_kind,

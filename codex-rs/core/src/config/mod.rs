@@ -48,6 +48,7 @@ use codex_config::types::Notice;
 use codex_config::types::OAuthCredentialsStoreMode;
 use codex_config::types::ResumeCwdMode;
 use codex_config::types::SessionPickerViewMode;
+use codex_config::types::TelemetryConfig;
 use codex_config::types::ToolSuggestConfig;
 use codex_config::types::ToolSuggestDisabledTool;
 use codex_config::types::ToolSuggestDiscoverable;
@@ -172,6 +173,7 @@ mod requirements;
 mod resolved_permission_profile;
 #[cfg(test)]
 mod schema;
+mod telemetry;
 pub use auth_keyring::bootstrap_auth_config;
 pub use auth_keyring::resolve_bootstrap_auth_keyring_backend_kind;
 pub use codex_agent_roles::AgentRoleConfig;
@@ -1093,6 +1095,9 @@ pub struct Config {
 
     /// Configured discoverable tools for tool suggestions.
     pub tool_suggest: ToolSuggestConfig,
+
+    /// Local telemetry configuration.
+    pub telemetry: TelemetryConfig,
 
     /// OTEL configuration (exporter type, endpoint, headers, etc.).
     pub otel: codex_config::types::OtelConfig,
@@ -4130,6 +4135,7 @@ impl Config {
             profile_workspace_roots,
         )
         .map_err(std::io::Error::from)?;
+        let telemetry = telemetry::resolve_config(cfg.telemetry.unwrap_or_default());
         let otel = otel::resolve_config(cfg.otel.unwrap_or_default(), &mut startup_warnings);
         let config = Self {
             model,
@@ -4321,6 +4327,7 @@ impl Config {
                 .and_then(|feedback| feedback.enabled)
                 .unwrap_or(true),
             tool_suggest,
+            telemetry,
             tui_notifications: cfg
                 .tui
                 .as_ref()

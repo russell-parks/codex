@@ -104,6 +104,7 @@ where
         auth_manager.clone(),
         thread_manager,
     );
+    codex_local_telemetry_extension::install(&mut builder);
     codex_memories_extension::install(&mut builder, codex_otel::global());
     codex_mcp_extension::install(&mut builder);
     codex_mcp_extension::install_executor_plugins(&mut builder, environment_manager);

@@ -8,6 +8,20 @@
 - Low-level metrics APIs via `codex_otel::metrics`.
 - Trace-context helpers via `codex_otel::trace_context` and crate-root re-exports.
 
+## Relationship to local telemetry
+
+Codex also supports a separate local telemetry store for user-owned, on-disk
+session analysis. That feature writes JSONL events and per-session summaries
+under `~/.codex/telemetry` and powers the `codex telemetry ...` CLI surface.
+
+The two systems are intentionally independent:
+
+- `codex-otel` handles external OpenTelemetry export.
+- Local telemetry handles local storage and analysis without network export.
+
+Existing `[otel]` configuration remains the source of truth for OpenTelemetry
+behavior even when local telemetry is enabled.
+
 ## Tracing and logs
 
 Create an OTEL provider from `OtelSettings`. The provider also configures

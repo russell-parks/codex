@@ -10,6 +10,7 @@ use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
+use crate::local_telemetry;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::shell_snapshot::ShellSnapshot;
@@ -1358,6 +1359,25 @@ impl Session {
                 codex_extension_api::ExtensionData::new(session_id.to_string());
             session_extension_data.insert(analytics_events_client.clone());
             let mcp_resource_client = Arc::new(McpResourceClient::new(Arc::clone(&mcp_runtime)));
+            session_extension_data.insert((*mcp_resource_client).clone());
+            let loaded_agents_md = agents_md_manager.get_loaded().await;
+            let thread_config_snapshot =
+                session_configuration.thread_config_snapshot(turn_environments.selections());
+            local_telemetry::initialize_session_extension_data(
+                local_telemetry::SessionTelemetryInit {
+                    config: config.as_ref(),
+                    thread_config: &thread_config_snapshot,
+                    initial_history: &initial_history,
+                    developer_instructions_loaded: session_configuration
+                        .developer_instructions
+                        .is_some(),
+                    loaded_agents_md: loaded_agents_md.as_deref(),
+                    thread_id: thread_extension_data.level_id(),
+                    rollout_path: rollout_path.as_deref(),
+                    session_store: &session_extension_data,
+                },
+            )
+            .await;
             let extension_metrics =
                 extension_metrics::from_session_telemetry(session_telemetry.clone());
             for contributor in extensions.thread_lifecycle_contributors() {

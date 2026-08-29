@@ -2986,6 +2986,7 @@ async fn get_account_with_chatgpt_plan_variants_returns_plan_type(
     let request_id = mcp
         .send_get_account_request(GetAccountParams {
             refresh_token: false,
+            reload_auth_from_storage: false,
         })
         .await?;
     let received: GetAccountResponse =

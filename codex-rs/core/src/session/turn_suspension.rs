@@ -109,7 +109,7 @@ pub(super) async fn suspend_turn_and_shutdown(
     })?;
     // Announce thread shutdown only after its writer closes so a replacement worker
     // cannot write the same thread concurrently.
-    handlers::emit_thread_stop_lifecycle(session.as_ref()).await;
+    handlers::emit_thread_stop_lifecycle(session.as_ref(), /*interrupted_active_turn*/ false).await;
     session
         .deliver_event_raw(Event {
             id: submission_id,

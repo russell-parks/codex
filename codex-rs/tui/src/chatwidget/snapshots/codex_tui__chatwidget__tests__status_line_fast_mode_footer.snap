@@ -3,7 +3,7 @@ source: tui/src/chatwidget/tests/status_and_layout.rs
 expression: normalized_backend_snapshot(terminal.backend())
 ---
 "                                                                                "
-"   gpt-5.6-sol default │  /tmp/project │ API key                              "
+"   gpt-5.2 high │  /tmp/project │ API key                                     "
 "                                                                                "
 "                                                                                "
 "› Ask Codex to do anything                                                      "

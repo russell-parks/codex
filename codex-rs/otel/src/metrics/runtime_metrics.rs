@@ -1,11 +1,14 @@
 use crate::metrics::names::API_CALL_COUNT_METRIC;
 use crate::metrics::names::API_CALL_DURATION_METRIC;
+use crate::metrics::names::API_REQUEST_BYTES_WRITTEN_METRIC;
+use crate::metrics::names::API_RESPONSE_BYTES_READ_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_IAPI_TTFT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TBT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_ENGINE_SERVICE_TTFT_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_INFERENCE_TIME_DURATION_METRIC;
 use crate::metrics::names::RESPONSES_API_OVERHEAD_DURATION_METRIC;
+use crate::metrics::names::SSE_BYTES_READ_METRIC;
 use crate::metrics::names::SSE_EVENT_COUNT_METRIC;
 use crate::metrics::names::SSE_EVENT_DURATION_METRIC;
 use crate::metrics::names::TOOL_CALL_COUNT_METRIC;
@@ -45,6 +48,8 @@ pub struct RuntimeMetricsSummary {
     pub streaming_events: RuntimeMetricTotals,
     pub websocket_calls: RuntimeMetricTotals,
     pub websocket_events: RuntimeMetricTotals,
+    pub bytes_written: u64,
+    pub bytes_read: u64,
     pub responses_api_overhead_ms: u64,
     pub responses_api_inference_time_ms: u64,
     pub responses_api_engine_iapi_ttft_ms: u64,
@@ -62,6 +67,8 @@ impl RuntimeMetricsSummary {
             && self.streaming_events.is_empty()
             && self.websocket_calls.is_empty()
             && self.websocket_events.is_empty()
+            && self.bytes_written == 0
+            && self.bytes_read == 0
             && self.responses_api_overhead_ms == 0
             && self.responses_api_inference_time_ms == 0
             && self.responses_api_engine_iapi_ttft_ms == 0
@@ -78,6 +85,8 @@ impl RuntimeMetricsSummary {
         self.streaming_events.merge(other.streaming_events);
         self.websocket_calls.merge(other.websocket_calls);
         self.websocket_events.merge(other.websocket_events);
+        self.bytes_written = self.bytes_written.saturating_add(other.bytes_written);
+        self.bytes_read = self.bytes_read.saturating_add(other.bytes_read);
         if other.responses_api_overhead_ms > 0 {
             self.responses_api_overhead_ms = other.responses_api_overhead_ms;
         }
@@ -137,6 +146,9 @@ impl RuntimeMetricsSummary {
             count: sum_counter(snapshot, WEBSOCKET_EVENT_COUNT_METRIC),
             duration_ms: sum_histogram_ms(snapshot, WEBSOCKET_EVENT_DURATION_METRIC),
         };
+        let bytes_written = sum_counter(snapshot, API_REQUEST_BYTES_WRITTEN_METRIC);
+        let bytes_read = sum_counter(snapshot, API_RESPONSE_BYTES_READ_METRIC)
+            .saturating_add(sum_counter(snapshot, SSE_BYTES_READ_METRIC));
         let responses_api_overhead_ms =
             sum_histogram_ms(snapshot, RESPONSES_API_OVERHEAD_DURATION_METRIC);
         let responses_api_inference_time_ms =
@@ -157,6 +169,8 @@ impl RuntimeMetricsSummary {
             streaming_events,
             websocket_calls,
             websocket_events,
+            bytes_written,
+            bytes_read,
             responses_api_overhead_ms,
             responses_api_inference_time_ms,
             responses_api_engine_iapi_ttft_ms,
