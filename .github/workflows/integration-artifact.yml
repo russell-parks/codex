@@ -20,15 +20,28 @@ concurrency:
 
 jobs:
   build:
-    name: Build integration artifact - aarch64-apple-darwin
-    runs-on: macos-15
+    name: Build integration artifact - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
     defaults:
       run:
         working-directory: codex-rs
     env:
-      TARGET: aarch64-apple-darwin
-      ARTIFACT_NAME: codex-integration-aarch64-apple-darwin
-      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
+      TARGET: ${{ matrix.target }}
+      ARTIFACT_NAME: codex-integration-${{ matrix.target }}
+      BINARIES: ${{ matrix.binaries }}
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.split_debuginfo }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host"
+            split_debuginfo: packed
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            binaries: "codex codex-code-mode-host codex-command-runner codex-windows-sandbox-setup"
+            split_debuginfo: off
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -38,23 +51,41 @@ jobs:
       - uses: ./.github/actions/setup-ci
 
       - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
 
       - name: Configure rusty_v8 artifact overrides and verify checksums
         uses: ./.github/actions/setup-rusty-v8
         with:
           target: ${{ env.TARGET }}
 
+      - name: Configure LLVM linker
+        if: ${{ runner.os == 'Windows' }}
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ env.TARGET }}
+
       - name: Build Codex runtime
+        shell: bash
         run: |
           set -euo pipefail
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+
+          build_args=()
+          for binary in $BINARIES; do
+            build_args+=(--bin "$binary")
+          done
+
           cargo build \
             --locked \
             --release \
             --target "$TARGET" \
-            --bin codex \
-            --bin codex-code-mode-host
+            "${build_args[@]}"
 
       - name: Stage package archive
+        shell: bash
         run: |
           set -euo pipefail
           archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
@@ -67,17 +98,28 @@ jobs:
 
       - name: Resolve artifact metadata
         id: artifact_metadata
+        shell: bash
         run: |
           set -euo pipefail
           echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-          version="$("${CARGO_TARGET_DIR}/${TARGET}/release/codex" --version)"
+          codex_bin="${CARGO_TARGET_DIR}/${TARGET}/release/codex"
+          if [[ "$TARGET" == *windows* ]]; then
+            codex_bin="${codex_bin}.exe"
+          fi
+          version="$("$codex_bin" --version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Write artifact metadata
+        shell: bash
         run: |
           set -euo pipefail
           dist_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
-          python3 - <<'PY'
+          if command -v python3 >/dev/null 2>&1; then
+            python_bin="python3"
+          else
+            python_bin="python"
+          fi
+          "$python_bin" - <<'PY'
           import json
           import os
           from pathlib import Path
