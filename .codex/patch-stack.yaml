@@ -24,18 +24,18 @@ features:
   - id: integration-artifact
     branch: ci/integration-artifact
     description: >
-      Builds a downloadable macOS arm64 Codex package artifact
-      from integration/latest so local use does not require a
-      large Cargo build tree.
+      Builds downloadable macOS arm64 and Windows x64 Codex
+      package artifacts from integration/latest so local use does
+      not require a large Cargo build tree.
     status: active
     order: 10
 
   - id: codex-cli-worktree-mode
     branch: feat/codex-cli-worktree-mode
     description: >
-      Adds CLI worktree mode as an upstream-intended feature kept
-      as close to main as the downstream stack allows.
-    status: active
+      Retired because upstream main now includes managed worktree
+      support for CLI and TUI workflows.
+    status: inactive
     order: 15
 
   - id: auth-reload-and-tui-recovery
