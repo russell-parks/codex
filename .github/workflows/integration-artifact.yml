@@ -26,21 +26,23 @@ jobs:
       run:
         working-directory: codex-rs
     env:
+      CODEX_REPO_ROOT: ${{ github.workspace }}
       TARGET: ${{ matrix.target }}
       ARTIFACT_NAME: codex-integration-${{ matrix.target }}
       BINARIES: ${{ matrix.binaries }}
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.split_debuginfo }}
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
     strategy:
       fail-fast: false
       matrix:
         include:
           - runner: macos-15
             target: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy codex-app-server"
             split_debuginfo: packed
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
-            binaries: "codex codex-code-mode-host codex-command-runner codex-windows-sandbox-setup"
+            binaries: "codex codex-code-mode-host codex-responses-api-proxy codex-windows-sandbox-setup codex-command-runner codex-app-server"
             split_debuginfo: off
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -115,20 +117,72 @@ jobs:
           cargo build \
             --locked \
             --release \
+            --timings \
             --target "$TARGET" \
             "${build_args[@]}"
 
-      - name: Stage package archive
+      - name: Upload Cargo timings
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: cargo-timings-integration-artifact-${{ matrix.target }}
+          path: ${{ env.CARGO_TARGET_DIR }}/**/cargo-timings/cargo-timing.html
+          if-no-files-found: warn
+
+      - name: Normalize Windows PDB names
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_dir="${CARGO_TARGET_DIR}/${TARGET}/release"
+          for binary in $BINARIES; do
+            pdb_name="${binary//-/_}"
+            if [[ -f "$release_dir/${pdb_name}.pdb" && ! -f "$release_dir/${binary}.pdb" ]]; then
+              cp "$release_dir/${pdb_name}.pdb" "$release_dir/${binary}.pdb"
+            fi
+          done
+
+      - name: Build symbols archive and strip binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/.github/scripts/archive-release-symbols-and-strip-binaries.sh" \
+            --target "$TARGET" \
+            --artifact-name "$TARGET" \
+            --release-dir "${CARGO_TARGET_DIR}/${TARGET}/release" \
+            --archive-dir "symbols-dist/${TARGET}" \
+            --binaries "$BINARIES"
+
+      - name: Stage release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          release_dir="${CARGO_TARGET_DIR}/${TARGET}/release"
+          mkdir -p "$dest"
+
+          exe_suffix=""
+          if [[ "$TARGET" == *windows* ]]; then
+            exe_suffix=".exe"
+          fi
+
+          for binary in $BINARIES; do
+            cp "${release_dir}/${binary}${exe_suffix}" \
+              "$dest/${binary}-${TARGET}${exe_suffix}"
+          done
+
+      - name: Build Codex package archives
         shell: bash
         run: |
           set -euo pipefail
           archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
           mkdir -p "$archive_dir"
-          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
-            --target "$TARGET" \
-            --bundle primary \
-            --entrypoint-dir "${CARGO_TARGET_DIR}/${TARGET}/release" \
-            --archive-dir "$archive_dir"
+          for bundle in primary app-server; do
+            bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+              --target "$TARGET" \
+              --bundle "$bundle" \
+              --entrypoint-dir "${CARGO_TARGET_DIR}/${TARGET}/release" \
+              --archive-dir "$archive_dir"
+          done
 
       - name: Resolve artifact metadata
         id: artifact_metadata
@@ -142,6 +196,104 @@ jobs:
           fi
           version="$("$codex_bin" --version)"
           echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Python runtime wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          case "$TARGET" in
+            aarch64-apple-darwin)
+              platform_tag="macosx_11_0_arm64"
+              ;;
+            x86_64-pc-windows-msvc)
+              platform_tag="win_amd64"
+              ;;
+            *)
+              echo "No Python runtime wheel platform tag for $TARGET"
+              exit 1
+              ;;
+          esac
+
+          venv_dir="${RUNNER_TEMP}/python-runtime-build-venv"
+          if command -v python3 >/dev/null 2>&1; then
+            python_bin="python3"
+          else
+            python_bin="python"
+          fi
+
+          "$python_bin" -m venv "$venv_dir"
+          if [[ "$TARGET" == *windows* ]]; then
+            venv_python="${venv_dir}/Scripts/python.exe"
+          else
+            venv_python="${venv_dir}/bin/python"
+          fi
+          "$venv_python" -m pip install build
+
+          stage_dir="${RUNNER_TEMP}/openai-codex-cli-bin-${TARGET}"
+          wheel_dir="${GITHUB_WORKSPACE}/python-runtime-dist/${TARGET}"
+          "$python_bin" "${GITHUB_WORKSPACE}/sdk/python/scripts/update_sdk_artifacts.py" \
+            stage-runtime \
+            "$stage_dir" \
+            "${GITHUB_WORKSPACE}/dist/${TARGET}/codex-package-${TARGET}.tar.gz" \
+            --codex-version "${CODEX_VERSION#codex-cli }" \
+            --platform-tag "$platform_tag"
+          "$venv_python" -m build --wheel --outdir "$wheel_dir" "$stage_dir"
+        env:
+          CODEX_VERSION: ${{ steps.artifact_metadata.outputs.version }}
+
+      - name: Compress release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          target="$TARGET"
+          export dest target
+
+          if [[ "$TARGET" == *windows* ]]; then
+            printf '%s\0' "$dest"/* |
+              xargs -0 -n1 -P2 bash -c '
+              set -euo pipefail
+              f=$1
+              base="$(basename "$f")"
+              if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+                exit 0
+              fi
+
+              tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+              if [[ "$base" == "codex-${target}.exe" ]]; then
+                bundle_dir="$(mktemp -d)"
+                runner_src="$dest/codex-command-runner-${target}.exe"
+                setup_src="$dest/codex-windows-sandbox-setup-${target}.exe"
+                if [[ -f "$runner_src" && -f "$setup_src" ]]; then
+                  cp "$dest/$base" "$bundle_dir/$base"
+                  cp "$runner_src" "$bundle_dir/codex-command-runner.exe"
+                  cp "$setup_src" "$bundle_dir/codex-windows-sandbox-setup.exe"
+                  (cd "$bundle_dir" && 7z a "$dest/${base}.zip" .)
+                else
+                  echo "warning: missing sandbox binaries; falling back to single-binary zip"
+                  echo "warning: expected $runner_src and $setup_src"
+                  (cd "$dest" && 7z a "${base}.zip" "$base")
+                fi
+                rm -rf "$bundle_dir"
+              else
+                (cd "$dest" && 7z a "${base}.zip" "$base")
+              fi
+
+              "${GITHUB_WORKSPACE}/.github/workflows/zstd" -T0 -19 "$dest/$base"
+            ' _
+          else
+            for f in "$dest"/*; do
+              base="$(basename "$f")"
+              if [[ "$base" == *.tar.gz || "$base" == *.tar.zst || "$base" == *.zip || "$base" == *.dmg ]]; then
+                continue
+              fi
+
+              tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+              zstd -T0 -19 --rm "$dest/$base"
+            done
+          fi
 
       - name: Write artifact metadata
         shell: bash
@@ -171,7 +323,7 @@ jobs:
               "target": os.environ["TARGET"],
               "workflow": os.environ["GITHUB_WORKFLOW"],
           }
-          (dist_dir / "integration-artifact.json").write_text(
+          (dist_dir / f"integration-artifact-{os.environ['TARGET']}.json").write_text(
               json.dumps(metadata, indent=2, sort_keys=True) + "\n"
           )
           PY
@@ -185,7 +337,87 @@ jobs:
         with:
           name: ${{ env.ARTIFACT_NAME }}
           path: |
-            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.gz
-            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.zst
-            dist/${{ env.TARGET }}/integration-artifact.json
+            dist/${{ env.TARGET }}/*
+            codex-rs/symbols-dist/${{ env.TARGET }}/*
+            python-runtime-dist/${{ env.TARGET }}/*.whl
           if-no-files-found: error
+
+  release:
+    name: Publish integration prerelease
+    needs: build
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Download integration artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: release-dist
+          pattern: codex-integration-*
+          merge-multiple: true
+
+      - name: Add Codex package checksum manifest
+        run: |
+          set -euo pipefail
+
+          manifest="release-dist/codex-package_SHA256SUMS"
+          tmp_manifest="$(mktemp)"
+          find release-dist -type f \
+            \( -name 'codex-package-*.tar.gz' -o -name 'codex-app-server-package-*.tar.gz' \) \
+            -print |
+            sort |
+            while IFS= read -r archive; do
+              sha256sum "$archive" |
+                awk -v name="$(basename "$archive")" '{ print $1 "  " name }'
+            done > "$tmp_manifest"
+
+          if [[ ! -s "$tmp_manifest" ]]; then
+            echo "No Codex package archives found for checksum manifest"
+            exit 1
+          fi
+
+          mv "$tmp_manifest" "$manifest"
+          cat "$manifest"
+
+      - name: Add config schema and installer scripts
+        run: |
+          set -euo pipefail
+          cp codex-rs/core/config.schema.json release-dist/config-schema.json
+          cp scripts/install/install.sh release-dist/install.sh
+          cp scripts/install/install.ps1 release-dist/install.ps1
+
+      - name: Define integration release metadata
+        id: release_metadata
+        run: |
+          set -euo pipefail
+          short_sha="$(git rev-parse --short=12 HEAD)"
+          notes_path="${RUNNER_TEMP}/integration-release-notes.md"
+          {
+            echo "Integration build for ${GITHUB_REF_NAME}"
+            echo
+            echo "Commit: ${GITHUB_SHA}"
+            echo "Workflow: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo
+            echo "This is an unsigned integration prerelease. It mirrors upstream release asset packaging where this fork has CI infrastructure."
+          } > "$notes_path"
+          echo "name=integration-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "tag=integration-${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "notes_path=${notes_path}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub prerelease
+        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe # v2.6.1
+        with:
+          name: ${{ steps.release_metadata.outputs.name }}
+          tag_name: ${{ steps.release_metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          body_path: ${{ steps.release_metadata.outputs.notes_path }}
+          files: release-dist/**
+          overwrite_files: true
+          make_latest: false
+          prerelease: true
