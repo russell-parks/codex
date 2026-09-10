@@ -163,6 +163,9 @@ jobs:
           for bundle in primary app-server; do
             cp -R "${RUNNER_TEMP}/macos-binaries/${bundle}/." "$release_dir/"
           done
+          for binary in $MACOS_BINARIES; do
+            chmod +x "$release_dir/${binary}"
+          done
 
       - name: Verify binaries
         shell: bash
