@@ -1,3 +1,4 @@
+use crate::auth_mode::auth_mode_to_api;
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::command_exec::CommandExecManager;
 use crate::command_exec::StartCommandExecParams;
@@ -536,6 +537,59 @@ use uuid::Uuid;
 
 #[cfg(test)]
 use codex_app_server_protocol::ServerRequest;
+
+#[derive(Clone)]
+pub(super) struct AuthReloadContext<'a> {
+    pub(super) auth_manager: &'a Arc<AuthManager>,
+    pub(super) thread_manager: &'a Arc<ThreadManager>,
+    pub(super) config_manager: &'a ConfigManager,
+    pub(super) outgoing: &'a OutgoingMessageSender,
+    pub(super) config: &'a Config,
+}
+
+async fn reload_auth_from_storage_if_idle(
+    context: AuthReloadContext<'_>,
+    thread_watch_manager: &ThreadWatchManager,
+    reason: &str,
+) {
+    if *thread_watch_manager.subscribe_running_turn_count().borrow() != 0 {
+        return;
+    }
+
+    if context.auth_manager.reload().await {
+        handle_auth_reload(context, reason).await;
+    }
+}
+
+async fn handle_auth_reload(context: AuthReloadContext<'_>, reason: &str) {
+    let invalidated_thread_count = context
+        .thread_manager
+        .invalidate_model_transport_caches()
+        .await;
+    info!(
+        "auth reloaded from storage before {reason}; invalidated model transport caches for {invalidated_thread_count} tracked thread(s)"
+    );
+    context
+        .config_manager
+        .update_managed_config_loader(Arc::clone(context.auth_manager), context.config);
+    context
+        .config_manager
+        .sync_default_client_residency_requirement()
+        .await;
+    let auth = context.auth_manager.auth_cached();
+    context
+        .outgoing
+        .send_server_notification(ServerNotification::AccountUpdated(
+            AccountUpdatedNotification {
+                auth_mode: auth
+                    .as_ref()
+                    .map(CodexAuth::api_auth_mode)
+                    .map(auth_mode_to_api),
+                plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            },
+        ))
+        .await;
+}
 
 pub(crate) mod account_processor;
 mod apps_processor;
