@@ -17,9 +17,12 @@ use serde::Serialize;
 use std::ffi::OsStr;
 use std::ffi::OsString;
 use std::fs;
+use std::io::Write;
 use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
+
+const NAMED_WORKTREES_EXCLUDE: &str = ".codex/worktrees/";
 
 pub use git::default_worktree_base;
 pub use settings::DEFAULT_WORKTREE_KEEP_COUNT;
@@ -166,18 +169,28 @@ impl WorktreeManager {
         })
     }
 
+    /// Creates or reuses a branch-backed worktree named by the caller.
+    ///
+    /// Named worktrees live under the source repository and are intentionally
+    /// excluded only from that repository's local Git status.
     pub fn create_named(&self, source_cwd: &Path, name: &str) -> Result<ManagedWorktree> {
         if name.is_empty()
             || matches!(name, "." | "..")
+            || name.starts_with('-')
+            || name.starts_with('.')
+            || name.ends_with('.')
+            || name.ends_with(".lock")
+            || name.contains("..")
             || !name
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
         {
-            bail!("worktree name must contain only ASCII letters, digits, '.', '_' or '-'");
+            bail!("worktree name must be a safe local Git branch name");
         }
         let source_cwd = dunce::canonicalize(source_cwd)?;
         let source_root = repository_root(&source_cwd)?;
         let relative_cwd = source_cwd.strip_prefix(&source_root)?.to_path_buf();
+        ensure_named_worktrees_excluded(&source_root)?;
         let root = source_root.join(".codex").join("worktrees").join(name);
         if root.exists() {
             let existing_root = dunce::canonicalize(&root)?;
@@ -416,6 +429,40 @@ impl WorktreeManager {
         linked_worktree_common_dir(&checkout)?;
         Ok(checkout)
     }
+}
+
+fn ensure_named_worktrees_excluded(source_root: &Path) -> Result<()> {
+    let common_dir = resolve_git_path(source_root, "--git-common-dir")?;
+    let info_dir = common_dir.join("info");
+    fs::create_dir_all(&info_dir)
+        .with_context(|| format!("cannot create Git info directory {}", info_dir.display()))?;
+    let exclude_path = info_dir.join("exclude");
+    let existing = match fs::read_to_string(&exclude_path) {
+        Ok(existing) => existing,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(error) => {
+            return Err(error).with_context(|| {
+                format!("cannot read Git exclude file {}", exclude_path.display())
+            });
+        }
+    };
+    if existing
+        .lines()
+        .any(|line| line.trim() == NAMED_WORKTREES_EXCLUDE)
+    {
+        return Ok(());
+    }
+
+    let mut exclude = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&exclude_path)
+        .with_context(|| format!("cannot update Git exclude file {}", exclude_path.display()))?;
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        writeln!(exclude)?;
+    }
+    writeln!(exclude, "{NAMED_WORKTREES_EXCLUDE}")?;
+    Ok(())
 }
 
 fn remove_worktree(source_root: &Path, root: &Path) -> Result<()> {

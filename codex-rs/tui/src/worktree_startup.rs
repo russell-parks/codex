@@ -14,7 +14,7 @@ pub(crate) struct ManagedTuiWorktree {
 
 impl ManagedTuiWorktree {
     pub(crate) fn bind(&self, thread_id: ThreadId) -> color_eyre::Result<()> {
-        if self.checkout.branch.is_none() {
+        if self.recovery.requires_thread_binding {
             self.manager
                 .bind_thread(&self.checkout.root, &thread_id.to_string())
                 .map_err(std::io::Error::other)
@@ -58,11 +58,21 @@ impl ManagedTuiWorktree {
 /// Shared by startup and its background thread request; reports at most once.
 struct StartupRecovery {
     root: PathBuf,
+    requires_thread_binding: bool,
     finished: AtomicBool,
 }
 
 impl StartupRecovery {
     fn message(&self) -> String {
+        if !self.requires_thread_binding {
+            return format!(
+                "Startup did not finish initializing this named worktree: {:?}\n\
+                 The checkout was kept. Inspect it and confirm no session is using it.\n\
+                 To remove it, run `git worktree remove <checkout-path>` from the source repository,\n\
+                 replacing <checkout-path> with the path above. Do not use --force.",
+                self.root
+            );
+        }
         format!(
             "Startup did not finish binding a thread to this worktree: {:?}\n\
              The checkout was kept. Inspect it and confirm no session is using it.\n\
@@ -254,6 +264,7 @@ pub(super) async fn prepare(
     .map_err(std::io::Error::other)?;
     let recovery = Arc::new(StartupRecovery {
         root: checkout.root.clone(),
+        requires_thread_binding: checkout.branch.is_none(),
         finished: AtomicBool::new(false),
     });
     let managed = ManagedTuiWorktree {

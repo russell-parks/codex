@@ -98,6 +98,17 @@ fn named_worktree_reuses_its_branch_and_rejects_unsafe_names() {
             .join("worktrees")
             .join("feature-worktree")
     );
+    assert_eq!(
+        run_git(
+            &fixture.repository,
+            &[
+                "check-ignore",
+                "--quiet",
+                ".codex/worktrees/feature-worktree"
+            ],
+        ),
+        ""
+    );
 
     let reused = manager
         .create_named(&fixture.repository, "feature-worktree")
@@ -107,6 +118,16 @@ fn named_worktree_reuses_its_branch_and_rejects_unsafe_names() {
     assert!(
         manager
             .create_named(&fixture.repository, "bad/name")
+            .is_err()
+    );
+    assert!(
+        manager
+            .create_named(&fixture.repository, ".hidden")
+            .is_err()
+    );
+    assert!(
+        manager
+            .create_named(&fixture.repository, "trailing.")
             .is_err()
     );
 }

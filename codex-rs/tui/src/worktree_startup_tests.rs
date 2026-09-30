@@ -7,11 +7,27 @@ use pretty_assertions::assert_eq;
 fn recovery_message_names_checkout_and_safe_manual_action() {
     let recovery = StartupRecovery {
         root: PathBuf::from("checkout with spaces"),
+        requires_thread_binding: true,
         // This test inspects rendering without printing or changing terminal state on drop.
         finished: AtomicBool::new(true),
     };
     insta::assert_snapshot!(recovery.message(), @r#"
     Startup did not finish binding a thread to this worktree: "checkout with spaces"
+    The checkout was kept. Inspect it and confirm no session is using it.
+    To remove it, run `git worktree remove <checkout-path>` from the source repository,
+    replacing <checkout-path> with the path above. Do not use --force.
+    "#);
+}
+
+#[test]
+fn named_worktree_recovery_message_does_not_reference_thread_binding() {
+    let recovery = StartupRecovery {
+        root: PathBuf::from("persistent checkout"),
+        requires_thread_binding: false,
+        finished: AtomicBool::new(true),
+    };
+    insta::assert_snapshot!(recovery.message(), @r#"
+    Startup did not finish initializing this named worktree: "persistent checkout"
     The checkout was kept. Inspect it and confirm no session is using it.
     To remove it, run `git worktree remove <checkout-path>` from the source repository,
     replacing <checkout-path> with the path above. Do not use --force.
@@ -32,6 +48,24 @@ async fn explicit_remote_worktree_rejection_is_snapshotted() -> anyhow::Result<(
     )
     .await
     .expect_err("managed worktrees require a local session");
+    insta::assert_snapshot!(error.to_string(), @"`--worktree` is only supported for local sessions");
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_remote_named_worktree_rejection_is_snapshotted() -> anyhow::Result<()> {
+    let cli = Cli::parse_from(["codex", "--worktree-name", "persistent-feature"]);
+    let endpoint = RemoteAppServerEndpoint::UnixSocket {
+        socket_path: AbsolutePathBuf::relative_to_current_dir("remote.sock")?,
+    };
+    let error = crate::startup_orchestration::run_main_inner(
+        cli,
+        Arg0DispatchPaths::default(),
+        LoaderOverrides::default(),
+        Some(endpoint),
+    )
+    .await
+    .expect_err("named worktrees require a local session");
     insta::assert_snapshot!(error.to_string(), @"`--worktree` is only supported for local sessions");
     Ok(())
 }
@@ -90,6 +124,7 @@ async fn refreshed_bundle_rechecks_source_during_config_reload() -> anyhow::Resu
     };
     let recovery = Arc::new(StartupRecovery {
         root: destination.clone(),
+        requires_thread_binding: true,
         finished: AtomicBool::new(true),
     });
     let worktree = ManagedTuiWorktree {
