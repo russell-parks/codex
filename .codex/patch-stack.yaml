@@ -33,9 +33,9 @@ features:
   - id: codex-cli-worktree-mode
     branch: feat/codex-cli-worktree-mode
     description: >
-      Retired because upstream main now includes managed worktree
-      support for CLI and TUI workflows.
-    status: inactive
+      Extends upstream managed worktree support with reusable,
+      user-named branch worktrees under <repo>/.codex/worktrees.
+    status: active
     order: 15
 
   - id: auth-reload-and-tui-recovery
