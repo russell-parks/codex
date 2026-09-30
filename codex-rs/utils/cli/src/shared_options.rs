@@ -71,6 +71,10 @@ pub struct SharedCliOptions {
     #[arg(long = "worktree", default_value_t = false)]
     pub worktree: bool,
 
+    /// Run the session in a reusable, branch-backed Git worktree.
+    #[arg(long = "worktree-name", value_name = "NAME")]
+    pub worktree_name: Option<String>,
+
     /// Additional directories that should be writable alongside the primary workspace.
     #[arg(long = "add-dir", value_name = "DIR", value_hint = clap::ValueHint::DirPath)]
     pub add_dir: Vec<PathBuf>,
@@ -92,6 +96,10 @@ impl SharedCliOptions {
         }
     }
 
+    pub fn uses_worktree(&self) -> bool {
+        self.worktree || self.worktree_name.is_some()
+    }
+
     pub fn inherit_exec_root_options(&mut self, root: &Self) {
         let self_selected_sandbox_mode = self.sandbox_mode.is_some()
             || self.auto_review
@@ -108,6 +116,7 @@ impl SharedCliOptions {
             bypass_hook_trust,
             cwd,
             worktree,
+            worktree_name,
             add_dir,
         } = self;
         let Self {
@@ -122,6 +131,7 @@ impl SharedCliOptions {
             bypass_hook_trust: root_bypass_hook_trust,
             cwd: root_cwd,
             worktree: root_worktree,
+            worktree_name: root_worktree_name,
             add_dir: root_add_dir,
         } = root;
 
@@ -150,6 +160,9 @@ impl SharedCliOptions {
             cwd.clone_from(root_cwd);
         }
         *worktree |= *root_worktree;
+        if worktree_name.is_none() {
+            worktree_name.clone_from(root_worktree_name);
+        }
         if !root_images.is_empty() {
             let mut merged_images = root_images.clone();
             merged_images.append(images);
@@ -178,6 +191,7 @@ impl SharedCliOptions {
             bypass_hook_trust,
             cwd,
             worktree,
+            worktree_name,
             add_dir,
         } = subcommand;
 
@@ -206,6 +220,9 @@ impl SharedCliOptions {
             self.cwd = Some(cwd);
         }
         self.worktree |= worktree;
+        if let Some(worktree_name) = worktree_name {
+            self.worktree_name = Some(worktree_name);
+        }
         if !images.is_empty() {
             self.images = images;
         }

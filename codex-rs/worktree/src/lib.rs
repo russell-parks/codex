@@ -15,6 +15,7 @@ use anyhow::Result;
 use anyhow::bail;
 use serde::Serialize;
 use std::ffi::OsStr;
+use std::ffi::OsString;
 use std::fs;
 use std::path::Component;
 use std::path::Path;
@@ -162,6 +163,77 @@ impl WorktreeManager {
             source_cwd,
             head_sha,
             branch: None,
+        })
+    }
+
+    pub fn create_named(&self, source_cwd: &Path, name: &str) -> Result<ManagedWorktree> {
+        if name.is_empty()
+            || matches!(name, "." | "..")
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        {
+            bail!("worktree name must contain only ASCII letters, digits, '.', '_' or '-'");
+        }
+        let source_cwd = dunce::canonicalize(source_cwd)?;
+        let source_root = repository_root(&source_cwd)?;
+        let relative_cwd = source_cwd.strip_prefix(&source_root)?.to_path_buf();
+        let root = source_root.join(".codex").join("worktrees").join(name);
+        if root.exists() {
+            let existing_root = dunce::canonicalize(&root)?;
+            if existing_root != root {
+                bail!("named worktree {name:?} must not be a symbolic link");
+            }
+            let source_common_dir = resolve_git_path(&source_root, "--git-common-dir")?;
+            let named_common_dir = resolve_git_path(&root, "--git-common-dir")?;
+            if named_common_dir != source_common_dir {
+                bail!("named worktree {name:?} does not belong to the source repository");
+            }
+            let branch = git_stdout(&root, ["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+            if branch != name {
+                bail!("named worktree {name:?} is not checked out on branch {name:?}");
+            }
+        } else {
+            fs::create_dir_all(root.parent().context("named worktree has no parent")?)?;
+            let branch_ref = format!("refs/heads/{name}");
+            let branch_exists = git_stdout(
+                &source_root,
+                ["for-each-ref", "--format=%(refname)", branch_ref.as_str()],
+            )? == branch_ref;
+            if branch_exists {
+                git_output(
+                    &source_root,
+                    GitOperation::WorkingTree,
+                    vec![
+                        OsString::from("worktree"),
+                        OsString::from("add"),
+                        root.as_os_str().to_os_string(),
+                        OsString::from(name),
+                    ],
+                )?;
+            } else {
+                git_output(
+                    &source_root,
+                    GitOperation::WorkingTree,
+                    vec![
+                        OsString::from("worktree"),
+                        OsString::from("add"),
+                        OsString::from("-b"),
+                        OsString::from(name),
+                        root.as_os_str().to_os_string(),
+                        OsString::from("HEAD"),
+                    ],
+                )?;
+            }
+        }
+        let head_sha = git_stdout(&root, ["rev-parse", "HEAD"])?;
+        Ok(ManagedWorktree {
+            cwd: root.join(relative_cwd),
+            root,
+            source_root,
+            source_cwd,
+            head_sha,
+            branch: Some(name.to_owned()),
         })
     }
 
