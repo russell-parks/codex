@@ -14,10 +14,12 @@ pub(crate) struct ManagedTuiWorktree {
 
 impl ManagedTuiWorktree {
     pub(crate) fn bind(&self, thread_id: ThreadId) -> color_eyre::Result<()> {
-        self.manager
-            .bind_thread(&self.checkout.root, &thread_id.to_string())
-            .map_err(std::io::Error::other)
-            .wrap_err("failed to bind managed worktree thread")?;
+        if self.checkout.branch.is_none() {
+            self.manager
+                .bind_thread(&self.checkout.root, &thread_id.to_string())
+                .map_err(std::io::Error::other)
+                .wrap_err("failed to bind managed worktree thread")?;
+        }
         self.recovery.finished.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -242,12 +244,14 @@ pub(super) async fn prepare(
         )
         .map_err(std::io::Error::other)?,
     );
-    let checkout = manager
-        .create(&codex_worktree::CreateWorktree {
+    let checkout = match cli.shared.worktree_name.as_deref() {
+        Some(name) => manager.create_named(source.cwd.as_path(), name),
+        None => manager.create(&codex_worktree::CreateWorktree {
             source_cwd: source.cwd.to_path_buf(),
             base: None,
-        })
-        .map_err(std::io::Error::other)?;
+        }),
+    }
+    .map_err(std::io::Error::other)?;
     let recovery = Arc::new(StartupRecovery {
         root: checkout.root.clone(),
         finished: AtomicBool::new(false),
