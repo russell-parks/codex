@@ -34,6 +34,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FileChangeItem;
@@ -251,6 +252,7 @@ fn token_usage_info() -> TokenUsageInfo {
             total_tokens: 6,
             codex_rollout_budget_units: None,
         },
+        last_usage_includes_reasoning: None,
         model_context_window: Some(128_000),
     }
 }
@@ -469,6 +471,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         .await;
     tool_contributor
         .on_tool_start(ToolStartInput {
+            serving_assessment: None,
             session_store: &harness.session_store,
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
@@ -503,6 +506,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         &harness.session_store,
         "turn-1",
         &codex_analytics::TurnProfile {
+            critical_path: codex_analytics::TurnCriticalPath::Disabled,
             before_first_sampling_ms: 10,
             sampling_ms: 20,
             compaction_ms: 0,
@@ -511,6 +515,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
             after_last_sampling_ms: 8,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            tools_change_count: 0,
         },
     );
     crate::record_rate_limits(&harness.session_store, "turn-1", &rate_limit_snapshot());
@@ -618,6 +623,7 @@ async fn aborted_and_errored_turns_update_counters() {
         .on_turn_error(TurnErrorInput {
             turn_id: "turn-2",
             error: CodexErrorInfo::Other,
+            error_details: &CodexErrorDetails::TurnAborted,
             session_store: &harness.session_store,
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
@@ -827,6 +833,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
     let tool_name = ToolName::plain("exec_command");
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            serving_assessment: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
@@ -848,6 +855,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
         .on_turn_error(TurnErrorInput {
             turn_id: "turn-3",
             error: CodexErrorInfo::Other,
+            error_details: &CodexErrorDetails::TurnAborted,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
@@ -886,6 +894,7 @@ async fn turn_item_capture_respects_privacy_defaults() {
     let contributor = &harness.registry.turn_item_contributors()[0];
 
     let mut assistant_item = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "assistant-1".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "hidden assistant text".to_string(),
@@ -990,6 +999,7 @@ async fn turn_item_capture_stores_opted_in_assistant_text_and_file_change_payloa
 
     let contributor = &registry.turn_item_contributors()[0];
     let mut assistant_item = TurnItem::AgentMessage(AgentMessageItem {
+        moderation: None,
         id: "assistant-2".to_string(),
         content: vec![AgentMessageContent::Text {
             text: "visible assistant text".to_string(),
