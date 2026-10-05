@@ -3330,6 +3330,93 @@ async fn get_account_with_chatgpt() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn turn_start_reloads_externally_replaced_chatgpt_auth() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let model_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            base_url: Some(model_server.uri()),
+            ..Default::default()
+        },
+    )?;
+    write_models_cache(codex_home.path()).await?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("initial-access-token")
+            .account_id("initial-account")
+            .email("initial@example.com")
+            .plan_type("pro"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    let response_mock = responses::mount_sse_once(
+        &model_server,
+        responses::sse(vec![
+            responses::ev_response_created("resp-turn"),
+            responses::ev_assistant_message("msg-turn", "done"),
+            responses::ev_completed("resp-turn"),
+        ]),
+    )
+    .await;
+
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .without_auto_env()
+        .with_env_overrides(&[("OPENAI_API_KEY", None)])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let thread_request = mcp
+        .send_thread_start_request(codex_app_server_protocol::ThreadStartParams {
+            model: Some("mock-model".to_string()),
+            ..Default::default()
+        })
+        .await?;
+    let thread: codex_app_server_protocol::ThreadStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(thread_request)).await??;
+
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("replacement-access-token")
+            .account_id("replacement-account")
+            .email("replacement@example.com")
+            .plan_type("promax"),
+        AuthCredentialsStoreMode::File,
+    )?;
+
+    let turn_request = mcp
+        .send_turn_start_request(codex_app_server_protocol::TurnStartParams {
+            thread_id: thread.thread.id,
+            input: vec![codex_app_server_protocol::UserInput::Text {
+                text: "hello".to_string(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let updated: AccountUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("account/updated"),
+    )
+    .await??;
+    assert_eq!(
+        updated,
+        AccountUpdatedNotification {
+            auth_mode: Some(AuthMode::Chatgpt),
+            plan_type: Some(AccountPlanType::ProMax),
+        }
+    );
+    let _: codex_app_server_protocol::TurnStartResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(turn_request)).await??;
+    let _: TurnCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("turn/completed"),
+    )
+    .await??;
+    response_mock.single_request();
+    Ok(())
+}
+
 #[test_case("promax", AccountPlanType::ProMax; "pro_max")]
 #[test_case("self_serve_business_prolite", AccountPlanType::SelfServeBusinessProLite; "business_prolite")]
 #[test_case("edu_plus", AccountPlanType::EduPlus; "edu_plus")]
