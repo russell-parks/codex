@@ -34,6 +34,7 @@ use codex_protocol::account::PlanType;
 use codex_protocol::config_types::CollaborationMode;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::config_types::Settings;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FileChangeItem;
@@ -511,6 +512,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
             after_last_sampling_ms: 8,
             sampling_request_count: 2,
             sampling_retry_count: 1,
+            tools_change_count: 0,
         },
     );
     crate::record_rate_limits(&harness.session_store, "turn-1", &rate_limit_snapshot());
@@ -618,6 +620,7 @@ async fn aborted_and_errored_turns_update_counters() {
         .on_turn_error(TurnErrorInput {
             turn_id: "turn-2",
             error: CodexErrorInfo::Other,
+            error_details: &CodexErrorDetails::TurnAborted,
             session_store: &harness.session_store,
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
@@ -848,6 +851,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
         .on_turn_error(TurnErrorInput {
             turn_id: "turn-3",
             error: CodexErrorInfo::Other,
+            error_details: &CodexErrorDetails::TurnAborted,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,
