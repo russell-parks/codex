@@ -7377,6 +7377,7 @@ async fn make_session_with_config_and_extensions_and_rx(
     };
     let default_environments = vec![local(config.cwd.clone())];
     let session_configuration = SessionConfiguration {
+        turn_extension_init: Default::default(),
         environments: default_environments.clone(),
         provider: create_model_provider(
             config.model_provider.clone(),
