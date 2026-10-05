@@ -273,6 +273,7 @@ fn standalone_app_server_emits_json_info_events() -> Result<()> {
 }
 
 #[tokio::test]
+#[ignore = "persistent SQLite log sink is disabled downstream"]
 async fn sqlite_log_metrics_exports_do_not_create_log_cycles() -> Result<()> {
     let quiet_period = codex_state::log_db::LogSinkQueueConfig::default().flush_interval
         + Duration::from_millis(600);
@@ -449,6 +450,7 @@ async fn sqlite_log_metrics_exports_do_not_create_log_cycles() -> Result<()> {
 #[test_case("0"; "success")]
 #[test_case("14"; "unavailable")]
 #[tokio::test]
+#[ignore = "persistent SQLite log sink is disabled downstream"]
 async fn sqlite_log_metrics_grpc_exports_do_not_create_log_cycles(grpc_status: &str) -> Result<()> {
     let quiet_period = codex_state::log_db::LogSinkQueueConfig::default().flush_interval
         + Duration::from_millis(600);

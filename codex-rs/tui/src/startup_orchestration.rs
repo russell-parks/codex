@@ -865,9 +865,7 @@ pub(super) async fn run_main_inner(
 
     let otel_tracing_layer = otel.as_ref().and_then(|o| o.tracing_layer());
 
-    let log_db = state_db
-        .clone()
-        .map(|state_db| log_db::start(state_db, std::sync::Arc::new(feedback.clone())));
+    let log_db: Option<log_db::LogDbLayer> = None;
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
