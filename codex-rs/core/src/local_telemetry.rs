@@ -8,15 +8,15 @@ use crate::agents_md::LoadedAgentsMd;
 use chrono::Utc;
 use codex_config::CONFIG_TOML_FILE;
 use codex_config::ConfigLayerSource;
-use codex_config::ConfigLayerStackOrdering;
 use codex_config::format_config_layer_source;
 use codex_extension_api::ExtensionData;
 use codex_git_utils::canonicalize_git_remote_url;
 use codex_git_utils::current_branch_name;
 use codex_git_utils::get_git_remote_urls_assume_git_repo;
 use codex_git_utils::get_git_repo_root;
-use codex_git_utils::get_has_changes;
+use codex_git_utils::get_has_changes_in_repo;
 use codex_git_utils::get_head_commit_hash;
+use codex_history::InitialHistory;
 use codex_local_telemetry::ChangedFilesSummary;
 use codex_local_telemetry::ConfigSnapshotSummary;
 use codex_local_telemetry::ConfigSourceSummary;
@@ -26,7 +26,6 @@ use codex_local_telemetry::LocalTelemetryWriter;
 use codex_local_telemetry::RuntimeSummary;
 use codex_local_telemetry_extension::SessionStopUpdate;
 use codex_local_telemetry_extension::SessionTelemetryBootstrap;
-use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::SessionSource;
 use tokio::process::Command;
 use tokio::time::timeout;
@@ -146,11 +145,7 @@ fn build_config_snapshot(
 ) -> ConfigSnapshotSummary {
     let config_sources = config
         .config_layer_stack
-        .get_layers(
-            ConfigLayerStackOrdering::LowestPrecedenceFirst,
-            /*include_disabled*/ false,
-        )
-        .into_iter()
+        .layers_low_to_high()
         .map(|layer| ConfigSourceSummary {
             kind: config_source_kind(&layer.name).to_string(),
             source: format_config_layer_source(&layer.name, CONFIG_TOML_FILE),
@@ -162,7 +157,8 @@ fn build_config_snapshot(
         .collect();
     let user_instruction_source = loaded_agents_md
         .and_then(LoadedAgentsMd::user_instructions)
-        .map(|instructions| instructions.source.display().to_string());
+        .and_then(|instructions| instructions.source.as_ref())
+        .map(|source| source.display().to_string());
     let project_instruction_sources = loaded_agents_md
         .into_iter()
         .flat_map(LoadedAgentsMd::sources)
@@ -181,6 +177,7 @@ fn build_config_snapshot(
 
 fn config_source_kind(source: &ConfigLayerSource) -> &'static str {
     match source {
+        ConfigLayerSource::PackagedDefaults { .. } => "packaged_defaults",
         ConfigLayerSource::Mdm { .. } => "mdm",
         ConfigLayerSource::System { .. } => "system",
         ConfigLayerSource::EnterpriseManaged { .. } => "enterprise_managed",
@@ -332,7 +329,7 @@ async fn collect_git_summary(cwd: &Path) -> (Option<String>, Option<GitSummary>)
     let (branch, commit_sha_before, dirty_before, remote_urls) = tokio::join!(
         current_branch_name(repo_root.as_path()),
         get_head_commit_hash(repo_root.as_path()),
-        get_has_changes(repo_root.as_path()),
+        get_has_changes_in_repo(cwd, repo_root.as_path()),
         get_git_remote_urls_assume_git_repo(repo_root.as_path()),
     );
     let remote = remote_urls.as_ref().and_then(select_remote_identity);
@@ -352,7 +349,7 @@ async fn collect_git_stop_summary(cwd: &Path) -> Option<GitSummary> {
     let repo_root = get_git_repo_root(cwd)?;
     let (commit_sha_after, dirty_after) = tokio::join!(
         get_head_commit_hash(repo_root.as_path()),
-        get_has_changes(repo_root.as_path()),
+        get_has_changes_in_repo(cwd, repo_root.as_path()),
     );
 
     Some(GitSummary {
@@ -365,11 +362,13 @@ async fn collect_git_stop_summary(cwd: &Path) -> Option<GitSummary> {
     })
 }
 
-fn select_remote_identity(remotes: &std::collections::BTreeMap<String, String>) -> Option<String> {
+fn select_remote_identity(
+    remotes: &std::collections::BTreeMap<String, codex_protocol::SanitizedGitUrl>,
+) -> Option<String> {
     remotes
         .get("origin")
         .or_else(|| remotes.values().next())
-        .and_then(|value| canonicalize_git_remote_url(value))
+        .and_then(|value| canonicalize_git_remote_url(value.as_str()))
 }
 
 fn resumed_from(initial_history: &InitialHistory) -> Option<String> {

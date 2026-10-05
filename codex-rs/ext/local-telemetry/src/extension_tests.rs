@@ -2,6 +2,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_extension_api::ConversationHistorySnapshot;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::ExtensionDataInit;
 use codex_extension_api::ExtensionRegistryBuilder;
@@ -11,6 +12,7 @@ use codex_extension_api::ToolCallOutcome;
 use codex_extension_api::ToolCallSource;
 use codex_extension_api::ToolFinishInput;
 use codex_extension_api::ToolName;
+use codex_extension_api::ToolPayload;
 use codex_extension_api::ToolStartInput;
 use codex_extension_api::TurnAbortInput;
 use codex_extension_api::TurnErrorInput;
@@ -36,6 +38,7 @@ use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FileChangeItem;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::CreditsSnapshot;
 use codex_protocol::protocol::FileChange;
@@ -62,6 +65,22 @@ use crate::state::PromptCaptureState;
 struct RecordingTelemetryWriter {
     events: Mutex<Vec<TelemetryEvent>>,
     summaries: Mutex<Vec<SessionSummary>>,
+}
+
+struct EmptyConversationHistory;
+
+impl ConversationHistorySnapshot for EmptyConversationHistory {
+    fn history_version(&self) -> u64 {
+        0
+    }
+
+    fn user_message_revision(&self) -> u64 {
+        0
+    }
+
+    fn items(&self) -> Box<dyn Iterator<Item = &ResponseItem> + Send + '_> {
+        Box::new(std::iter::empty())
+    }
 }
 
 impl RecordingTelemetryWriter {
@@ -177,6 +196,7 @@ impl Harness {
                 persistent_thread_state_available: true,
                 environments: &[],
                 mcp_resource_client: None,
+                extension_metrics: None,
                 session_store: &session_store,
                 thread_store: &thread_store,
             })
@@ -220,6 +240,7 @@ fn token_usage_info() -> TokenUsageInfo {
             output_tokens: 4,
             reasoning_output_tokens: 1,
             total_tokens: 15,
+            codex_rollout_budget_units: None,
         },
         last_token_usage: TokenUsage {
             input_tokens: 3,
@@ -228,6 +249,7 @@ fn token_usage_info() -> TokenUsageInfo {
             output_tokens: 2,
             reasoning_output_tokens: 1,
             total_tokens: 6,
+            codex_rollout_budget_units: None,
         },
         model_context_window: Some(128_000),
     }
@@ -237,6 +259,7 @@ fn rate_limit_snapshot() -> RateLimitSnapshot {
     RateLimitSnapshot {
         limit_id: Some("codex".to_string()),
         limit_name: Some("Codex".to_string()),
+        normal_model_slug: None,
         primary: Some(RateLimitWindow {
             used_percent: 12.5,
             window_minutes: Some(60),
@@ -430,7 +453,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         .on_turn_start(TurnStartInput {
             turn_id: "turn-1",
             collaboration_mode: &collaboration_mode,
-            token_usage_at_turn_start: &TokenUsage::default(),
+            token_usage_at_turn_start: Some(&TokenUsage::default()),
             session_store: &harness.session_store,
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
@@ -450,8 +473,16 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
             turn_id: "turn-1",
+            root_turn_id: None,
             call_id: "call-1",
+            originating_item_id: None,
             tool_name: &tool_name,
+            mcp_tool: None,
+            permissions: Box::pin(async { None }),
+            payload: &ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            conversation_history: Arc::new(EmptyConversationHistory),
             source: ToolCallSource::Direct,
         })
         .await;
@@ -698,6 +729,7 @@ async fn prompt_text_is_stored_only_when_enabled() {
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
+            extension_metrics: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -778,6 +810,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
+            extension_metrics: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -798,8 +831,16 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
             thread_store: &thread_store,
             turn_store: &turn_store,
             turn_id: "turn-3",
+            root_turn_id: None,
             call_id: "call-3",
+            originating_item_id: None,
             tool_name: &tool_name,
+            mcp_tool: None,
+            permissions: Box::pin(async { None }),
+            payload: &ToolPayload::Function {
+                arguments: "{}".to_string(),
+            },
+            conversation_history: Arc::new(EmptyConversationHistory),
             source: ToolCallSource::Direct,
         })
         .await;
@@ -851,6 +892,8 @@ async fn turn_item_capture_respects_privacy_defaults() {
         }],
         phase: None,
         memory_citation: None,
+        delivery: None,
+        questions: None,
     });
     contributor
         .contribute(&harness.thread_store, &turn_store, &mut assistant_item)
@@ -939,6 +982,7 @@ async fn turn_item_capture_stores_opted_in_assistant_text_and_file_change_payloa
             persistent_thread_state_available: false,
             environments: &[],
             mcp_resource_client: None,
+            extension_metrics: None,
             session_store: &session_store,
             thread_store: &thread_store,
         })
@@ -952,6 +996,8 @@ async fn turn_item_capture_stores_opted_in_assistant_text_and_file_change_payloa
         }],
         phase: None,
         memory_citation: None,
+        delivery: None,
+        questions: None,
     });
     contributor
         .contribute(&thread_store, &turn_store, &mut assistant_item)

@@ -294,6 +294,7 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
         codex_protocol::account::PlanType::Go => String::from("go"),
         codex_protocol::account::PlanType::Plus => String::from("plus"),
         codex_protocol::account::PlanType::Pro => String::from("pro"),
+        codex_protocol::account::PlanType::ProMax => String::from("pro_max"),
         codex_protocol::account::PlanType::ProLite => String::from("pro_lite"),
         codex_protocol::account::PlanType::Team => String::from("team"),
         codex_protocol::account::PlanType::SelfServeBusinessProLite => {
@@ -312,6 +313,8 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
         }
         codex_protocol::account::PlanType::Enterprise => String::from("enterprise"),
         codex_protocol::account::PlanType::Edu => String::from("edu"),
+        codex_protocol::account::PlanType::EduPlus => String::from("edu_plus"),
+        codex_protocol::account::PlanType::EduPro => String::from("edu_pro"),
         codex_protocol::account::PlanType::Unknown => String::from("unknown"),
     }
 }
