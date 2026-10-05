@@ -374,7 +374,7 @@ impl LoadedAgentsMd {
                 .all(|entry| entry.contents.trim().is_empty())
     }
 
-    pub(crate) fn user_instructions(&self) -> Option<&UserInstructions> {
+    pub(crate) fn user_instructions(&self) -> Option<&Instructions> {
         self.user_instructions.as_ref()
     }
 

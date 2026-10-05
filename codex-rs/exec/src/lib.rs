@@ -86,7 +86,6 @@ use codex_history::RolloutItem;
 use codex_history::RolloutLine;
 use codex_local_telemetry::SessionSummary as LocalTelemetrySessionSummary;
 use codex_local_telemetry::summary_file_path;
-use codex_login::AuthConfig;
 use codex_login::default_client::set_default_client_residency_requirement;
 use codex_login::default_client::set_default_originator;
 use codex_login::enforce_login_restrictions;
@@ -310,6 +309,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         cwd,
         mut add_dir,
         worktree,
+        worktree_name: _,
     } = shared;
 
     if worktree {

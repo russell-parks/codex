@@ -20,5 +20,5 @@ mod sandbox;
 #[cfg(target_os = "macos")]
 mod seatbelt;
 mod server_error_exit;
-mod worktree;
 mod telemetry;
+mod worktree;

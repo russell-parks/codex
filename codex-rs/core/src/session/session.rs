@@ -14,11 +14,11 @@ use crate::config::ConstraintError;
 use crate::environment_selection::ThreadEnvironments;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::hook_mcp_executor::CoreHookMcpExecutor;
+use crate::local_telemetry;
 use crate::mcp_tool_call::McpToolApprovalMetadata;
 use crate::responses_metadata::CodexResponsesMetadata;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::responses_metadata::CompactionTurnMetadata;
-use crate::local_telemetry;
 use crate::shell_snapshot::ShellSnapshot;
 use crate::shell_snapshot::SnapshotCredentialBrokerState;
 use crate::state::ActiveTurn;
@@ -1688,10 +1688,12 @@ impl Session {
             let workspace_routing = thread_extension_data
                 .get_or_init(|| config.workspace_routing_context());
             let loaded_agents_md = agents_md_manager.get_loaded().await;
+            let telemetry_thread_config = session_configuration
+                .thread_config_snapshot(environment_selections.to_vec());
             local_telemetry::initialize_session_extension_data(
                 local_telemetry::SessionTelemetryInit {
                     config: config.as_ref(),
-                    thread_config: &session_configuration.thread_config_snapshot(),
+                    thread_config: &telemetry_thread_config,
                     initial_history: &initial_history,
                     developer_instructions_loaded: session_configuration
                         .developer_instructions
