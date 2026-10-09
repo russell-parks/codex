@@ -14,10 +14,12 @@ pub(crate) struct ManagedTuiWorktree {
 
 impl ManagedTuiWorktree {
     pub(crate) fn bind(&self, thread_id: ThreadId) -> color_eyre::Result<()> {
-        self.manager
-            .bind_thread(&self.checkout.root, &thread_id.to_string())
-            .map_err(std::io::Error::other)
-            .wrap_err("failed to bind managed worktree thread")?;
+        if self.recovery.requires_thread_binding {
+            self.manager
+                .bind_thread(&self.checkout.root, &thread_id.to_string())
+                .map_err(std::io::Error::other)
+                .wrap_err("failed to bind managed worktree thread")?;
+        }
         self.recovery.finished.store(true, Ordering::Relaxed);
         Ok(())
     }
@@ -56,11 +58,21 @@ impl ManagedTuiWorktree {
 /// Shared by startup and its background thread request; reports at most once.
 struct StartupRecovery {
     root: PathBuf,
+    requires_thread_binding: bool,
     finished: AtomicBool,
 }
 
 impl StartupRecovery {
     fn message(&self) -> String {
+        if !self.requires_thread_binding {
+            return format!(
+                "Startup did not finish initializing this named worktree: {:?}\n\
+                 The checkout was kept. Inspect it and confirm no session is using it.\n\
+                 To remove it, run `git worktree remove <checkout-path>` from the source repository,\n\
+                 replacing <checkout-path> with the path above. Do not use --force.",
+                self.root
+            );
+        }
         format!(
             "Startup did not finish binding a thread to this worktree: {:?}\n\
              The checkout was kept. Inspect it and confirm no session is using it.\n\
@@ -242,14 +254,17 @@ pub(super) async fn prepare(
         )
         .map_err(std::io::Error::other)?,
     );
-    let checkout = manager
-        .create(&codex_worktree::CreateWorktree {
+    let checkout = match cli.shared.worktree_name.as_deref() {
+        Some(name) => manager.create_named(source.cwd.as_path(), name),
+        None => manager.create(&codex_worktree::CreateWorktree {
             source_cwd: source.cwd.to_path_buf(),
             base: None,
-        })
-        .map_err(std::io::Error::other)?;
+        }),
+    }
+    .map_err(std::io::Error::other)?;
     let recovery = Arc::new(StartupRecovery {
         root: checkout.root.clone(),
+        requires_thread_binding: checkout.branch.is_none(),
         finished: AtomicBool::new(false),
     });
     let managed = ManagedTuiWorktree {
