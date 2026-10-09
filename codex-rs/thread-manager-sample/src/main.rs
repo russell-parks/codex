@@ -50,6 +50,7 @@ use codex_core_api::SessionSource;
 use codex_core_api::SqliteConfig;
 use codex_core_api::StartIfIdleSubmission;
 use codex_core_api::StartThreadOptions;
+use codex_core_api::TelemetryConfig;
 use codex_core_api::TerminalResizeReflowConfig;
 use codex_core_api::ThreadManager;
 use codex_core_api::ThreadStoreConfig;
@@ -306,6 +307,7 @@ async fn new_config(
         tui_session_picker_view: SessionPickerViewMode::Dense,
         tui_agents_overview_grouping: Default::default(),
         tui_resume_cwd: None,
+        tui_usage_limit_resume_prompt: None,
         tui_vim_mode_default: false,
         tui_question_esc_back: true,
         cwd: cwd.clone(),
@@ -393,6 +395,7 @@ async fn new_config(
         analytics_enabled: Some(false),
         feedback_enabled: false,
         tool_suggest: ToolSuggestConfig::default(),
+        telemetry: TelemetryConfig::default(),
         otel: OtelConfig::default(),
     };
     config
