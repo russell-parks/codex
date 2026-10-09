@@ -725,16 +725,9 @@ pub async fn run_main_with_transport_options(
             .boxed(),
     };
 
-    let log_write_warning = log_write_warning::LogWriteWarningReporter::new(
-        feedback.clone(),
-        &outgoing_message_sender,
-        &config,
-    );
     let feedback_layer = feedback.logger_layer();
     let feedback_metadata_layer = feedback.metadata_layer();
-    let log_db = state_db
-        .clone()
-        .map(|state_db| log_db::start(state_db, log_write_warning.clone()));
+    let log_db: Option<log_db::LogDbLayer> = None;
     let log_db_layer = log_db
         .clone()
         .map(|layer| layer.with_filter(log_db::default_filter()));
