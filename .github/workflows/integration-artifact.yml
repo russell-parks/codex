@@ -1,0 +1,192 @@
+name: integration-artifact
+
+on:
+  push:
+    branches:
+      - integration/latest
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch, tag, or SHA to build"
+        required: false
+        default: integration/latest
+
+permissions:
+  contents: read
+
+concurrency:
+  group: integration-artifact-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build integration artifact - ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    env:
+      CODEX_REPO_ROOT: ${{ github.workspace }}
+      TARGET: ${{ matrix.target }}
+      ARTIFACT_NAME: codex-integration-${{ matrix.target }}
+      BINARIES: ${{ matrix.binaries }}
+      CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.split_debuginfo }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            binaries: "codex codex-code-mode-host"
+            split_debuginfo: packed
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            binaries: "codex codex-code-mode-host codex-command-runner codex-windows-sandbox-setup"
+            split_debuginfo: off
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-ci
+        if: ${{ runner.os != 'Windows' }}
+
+      - name: Configure CI build paths
+        if: ${{ runner.os == 'Windows' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ci_build_root="${RUNNER_TEMP//\\//}/codex-ci"
+          build_dirs=(
+            "$ci_build_root/cargo-target"
+            "$ci_build_root/tmp"
+          )
+          mkdir -p "${build_dirs[@]}"
+          {
+            echo "CI_BUILD_ROOT=$ci_build_root"
+            echo "CARGO_TARGET_DIR=$ci_build_root/cargo-target"
+            echo "TEMP=$ci_build_root/tmp"
+            echo "TMP=$ci_build_root/tmp"
+            echo "CARGO_NET_GIT_FETCH_WITH_CLI=true"
+          } >> "$GITHUB_ENV"
+
+      - name: Install DotSlash
+        if: ${{ runner.os == 'Windows' }}
+        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
+
+      - name: Make DotSlash available in PATH
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
+
+      - name: Enable Git long paths
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ env.TARGET }}
+
+      - name: Configure rusty_v8 artifact overrides and verify checksums
+        uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ env.TARGET }}
+
+      - name: Configure LLVM linker
+        if: ${{ runner.os == 'Windows' }}
+        uses: ./.github/actions/setup-msvc-env
+        with:
+          target: ${{ env.TARGET }}
+
+      - name: Build Codex runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" ]]; then
+            export LIBSQLITE3_FLAGS=SQLITE_DISABLE_INTRINSIC
+          fi
+
+          build_args=()
+          for binary in $BINARIES; do
+            build_args+=(--bin "$binary")
+          done
+
+          cargo build \
+            --locked \
+            --release \
+            --target "$TARGET" \
+            "${build_args[@]}"
+
+      - name: Stage package archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          mkdir -p "$archive_dir"
+          bash "${GITHUB_WORKSPACE}/.github/scripts/build-codex-package-archive.sh" \
+            --target "$TARGET" \
+            --bundle primary \
+            --entrypoint-dir "${CARGO_TARGET_DIR}/${TARGET}/release" \
+            --archive-dir "$archive_dir"
+
+      - name: Resolve artifact metadata
+        id: artifact_metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          codex_bin="${CARGO_TARGET_DIR}/${TARGET}/release/codex"
+          if [[ "$TARGET" == *windows* ]]; then
+            codex_bin="${codex_bin}.exe"
+          fi
+          version="$("$codex_bin" --version)"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Write artifact metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          dist_dir="${GITHUB_WORKSPACE}/dist/${TARGET}"
+          if command -v python3 >/dev/null 2>&1; then
+            python_bin="python3"
+          else
+            python_bin="python"
+          fi
+          "$python_bin" - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          dist_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "dist" / os.environ["TARGET"]
+          metadata = {
+              "artifact_name": os.environ["ARTIFACT_NAME"],
+              "archive": f"codex-package-{os.environ['TARGET']}.tar.gz",
+              "commit": os.environ["BUILD_COMMIT"],
+              "codex_version": os.environ["CODEX_VERSION"],
+              "repository": os.environ["GITHUB_REPOSITORY"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "source_ref": os.environ["BUILD_REF"],
+              "target": os.environ["TARGET"],
+              "workflow": os.environ["GITHUB_WORKFLOW"],
+          }
+          (dist_dir / "integration-artifact.json").write_text(
+              json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+          )
+          PY
+        env:
+          BUILD_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
+          BUILD_COMMIT: ${{ steps.artifact_metadata.outputs.commit }}
+          CODEX_VERSION: ${{ steps.artifact_metadata.outputs.version }}
+
+      - name: Upload integration artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.gz
+            dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.zst
+            dist/${{ env.TARGET }}/integration-artifact.json
+          if-no-files-found: error
