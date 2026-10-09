@@ -1,0 +1,80 @@
+version: 1
+
+upstream:
+  remote: upstream
+  branch: main
+
+path:
+  start: main
+  finish: integration/latest
+
+integration:
+  branch: integration/latest
+
+features:
+  - id: bootstrap
+    branch: fork-maintenance/bootstrap
+    description: >
+      Bootstraps fork maintenance metadata for this repository
+      with the patch stack definition used by the local
+      fork-maintenance workflow.
+    status: active
+    order: 0
+
+  - id: integration-artifact
+    branch: ci/integration-artifact
+    description: >
+      Builds a downloadable macOS arm64 Codex package artifact
+      from integration/latest so local use does not require a
+      large Cargo build tree.
+    status: active
+    order: 10
+
+  - id: codex-cli-worktree-mode
+    branch: feat/codex-cli-worktree-mode
+    description: >
+      Extends upstream managed worktree support with reusable,
+      user-named branch worktrees under <repo>/.codex/worktrees.
+    status: active
+    order: 15
+
+  - id: auth-reload-and-tui-recovery
+    branch: feat/auth-reload-and-tui-recovery
+    description: >
+      Reloads persisted authentication before idle app-server turns,
+      invalidates account-sensitive caches, and notifies clients when
+      an external account switch is detected.
+    status: active
+    order: 20
+
+  - id: revert-codext-resume-naming
+    branch: fix/revert-codext-resume-naming
+    description: >
+      Retired because current upstream already uses codex resume
+      naming and no longer contains the downstream tooltip surface.
+    status: inactive
+    order: 30
+    depends_on:
+      - auth-reload-and-tui-recovery
+
+  - id: disable-persistent-sqlite-log-db
+    branch: fix/disable-persistent-sqlite-log-db
+    description: >
+      Temporarily disables the persistent SQLite log DB sink
+      while openai/codex#17320 remains unresolved, without removing
+      the upstream storage implementation.
+    status: active
+    order: 40
+    depends_on:
+      - auth-reload-and-tui-recovery
+
+  - id: local-telemetry
+    branch: feat/local-telemetry
+    description: >
+      Adds local Codex CLI telemetry capture, reporting, and
+      privacy-aware usage accounting on top of the downstream
+      fork maintenance stack.
+    status: active
+    order: 50
+    depends_on:
+      - disable-persistent-sqlite-log-db
