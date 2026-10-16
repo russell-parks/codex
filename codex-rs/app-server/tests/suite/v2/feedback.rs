@@ -92,6 +92,7 @@ async fn feedback_upload_limits_concurrency_and_releases_failed_uploads() -> Res
 }
 
 #[tokio::test]
+#[ignore = "persistent SQLite log sink is disabled downstream"]
 async fn feedback_upload_includes_sqlite_flush_and_query_failures() -> Result<()> {
     use std::io::Read;
     use std::sync::Arc;
