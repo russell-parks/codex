@@ -2479,7 +2479,10 @@ impl AuthManager {
     pub async fn reload(&self) -> bool {
         tracing::info!("Reloading auth");
         let new_auth = self.load_auth().await;
-        self.set_cached_auth(new_auth)
+        let cached_auth = self.auth_cached();
+        let changed = !Self::auths_equal_for_refresh(cached_auth.as_ref(), new_auth.as_ref());
+        self.set_cached_auth(new_auth);
+        changed
     }
 
     async fn reload_if_account_id_matches(
