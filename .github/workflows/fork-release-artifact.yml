@@ -1,26 +1,26 @@
-name: integration-artifact
+name: fork-release-artifact
 
 on:
   push:
     branches:
-      - integration/latest
+      - release/fork-0.163.0
   workflow_dispatch:
     inputs:
       ref:
         description: "Branch, tag, or SHA to build"
         required: false
-        default: integration/latest
+        default: release/fork-0.163.0
 
 permissions:
   contents: read
 
 concurrency:
-  group: integration-artifact-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+  group: fork-release-artifact-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
   build:
-    name: Build integration artifact - ${{ matrix.target }}
+    name: Build fork 0.163.0 - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -28,7 +28,7 @@ jobs:
     env:
       CODEX_REPO_ROOT: ${{ github.workspace }}
       TARGET: ${{ matrix.target }}
-      ARTIFACT_NAME: codex-integration-${{ matrix.target }}
+      ARTIFACT_NAME: codex-fork-0.163.0-${{ matrix.target }}
       BINARIES: ${{ matrix.binaries }}
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.split_debuginfo }}
     strategy:
@@ -161,6 +161,9 @@ jobs:
 
           dist_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "dist" / os.environ["TARGET"]
           metadata = {
+              "upstream_tag": "rust-v0.163.0",
+              "upstream_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+              "fork_stack_source": "45c913777dc56e3360de023b62f820c89f64cb65",
               "artifact_name": os.environ["ARTIFACT_NAME"],
               "archive": f"codex-package-{os.environ['TARGET']}.tar.gz",
               "commit": os.environ["BUILD_COMMIT"],
@@ -172,7 +175,7 @@ jobs:
               "target": os.environ["TARGET"],
               "workflow": os.environ["GITHUB_WORKFLOW"],
           }
-          (dist_dir / "integration-artifact.json").write_text(
+          (dist_dir / "fork-release-artifact.json").write_text(
               json.dumps(metadata, indent=2, sort_keys=True) + "\n"
           )
           PY
@@ -188,5 +191,5 @@ jobs:
           path: |
             dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.gz
             dist/${{ env.TARGET }}/codex-package-${{ env.TARGET }}.tar.zst
-            dist/${{ env.TARGET }}/integration-artifact.json
+            dist/${{ env.TARGET }}/fork-release-artifact.json
           if-no-files-found: error
