@@ -2097,6 +2097,7 @@ dependencies = [
  "codex-hooks",
  "codex-http-client",
  "codex-image-generation-extension",
+ "codex-local-telemetry-extension",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -2532,6 +2533,7 @@ dependencies = [
  "codex-home",
  "codex-http-client",
  "codex-install-context",
+ "codex-local-telemetry",
  "codex-login",
  "codex-mcp",
  "codex-memories-write",
@@ -2971,6 +2973,8 @@ dependencies = [
  "codex-http-client",
  "codex-image-generation-extension",
  "codex-install-context",
+ "codex-local-telemetry",
+ "codex-local-telemetry-extension",
  "codex-login",
  "codex-mcp",
  "codex-mcp-extension",
@@ -3196,6 +3200,7 @@ dependencies = [
  "codex-feedback",
  "codex-git-utils",
  "codex-history",
+ "codex-local-telemetry",
  "codex-login",
  "codex-model-provider-info",
  "codex-otel",
@@ -3880,6 +3885,33 @@ dependencies = [
  "tracing",
  "which 8.0.0",
  "wiremock",
+]
+
+[[package]]
+name = "codex-local-telemetry"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "pretty_assertions",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+]
+
+[[package]]
+name = "codex-local-telemetry-extension"
+version = "0.0.0"
+dependencies = [
+ "chrono",
+ "codex-analytics",
+ "codex-extension-api",
+ "codex-local-telemetry",
+ "codex-protocol",
+ "pretty_assertions",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
