@@ -114,6 +114,7 @@ pub(crate) struct PendingApproval {
     pub(crate) kind: codex_protocol::approvals::ExecApprovalKind,
     // A yielded cell can emit a prompt for its original turn while a later turn services it.
     pub(crate) turn_id: String,
+    pub(crate) approval_kind: &'static str,
 }
 
 impl PendingApproval {
@@ -195,6 +196,7 @@ impl TurnState {
         tx: oneshot::Sender<ReviewDecision>,
         kind: codex_protocol::approvals::ExecApprovalKind,
         turn_id: String,
+        approval_kind: &'static str,
     ) -> Option<PendingApproval> {
         self.pending_approvals
             .lock()
@@ -205,6 +207,7 @@ impl TurnState {
                     sender: tx,
                     kind,
                     turn_id,
+                    approval_kind,
                 },
             )
     }
