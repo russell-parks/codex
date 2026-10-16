@@ -82,6 +82,57 @@ fn create_worktree(
 }
 
 #[test]
+fn named_worktree_reuses_its_branch_and_rejects_unsafe_names() {
+    let fixture = RepositoryFixture::new();
+    let manager = fixture.manager();
+
+    let checkout = manager
+        .create_named(&fixture.repository, "feature-worktree")
+        .expect("create named checkout");
+    assert_eq!(checkout.branch.as_deref(), Some("feature-worktree"));
+    assert_eq!(
+        checkout.root,
+        fixture
+            .repository
+            .join(".codex")
+            .join("worktrees")
+            .join("feature-worktree")
+    );
+    assert_eq!(
+        run_git(
+            &fixture.repository,
+            &[
+                "check-ignore",
+                "--quiet",
+                ".codex/worktrees/feature-worktree"
+            ],
+        ),
+        ""
+    );
+
+    let reused = manager
+        .create_named(&fixture.repository, "feature-worktree")
+        .expect("reuse named checkout");
+    assert_eq!(reused, checkout);
+    assert!(manager.create_named(&fixture.repository, "..").is_err());
+    assert!(
+        manager
+            .create_named(&fixture.repository, "bad/name")
+            .is_err()
+    );
+    assert!(
+        manager
+            .create_named(&fixture.repository, ".hidden")
+            .is_err()
+    );
+    assert!(
+        manager
+            .create_named(&fixture.repository, "trailing.")
+            .is_err()
+    );
+}
+
+#[test]
 fn removing_managed_worktree_refuses_dirty_or_unrelated_checkouts() {
     let fixture = RepositoryFixture::new();
     let manager = fixture.manager();
