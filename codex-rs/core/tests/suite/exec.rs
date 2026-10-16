@@ -13,6 +13,7 @@ use codex_sandboxing::SandboxType;
 use codex_sandboxing::get_platform_sandbox;
 use core_test_support::PathExt;
 use std::collections::HashMap;
+use std::path::Path;
 use tempfile::TempDir;
 
 fn skip_test() -> bool {
@@ -33,13 +34,15 @@ where
         .expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
     let cwd = tmp.path().abs();
+    let mut env = HashMap::new();
+    env.insert("TMPDIR".to_string(), cwd.to_string_lossy().into_owned());
 
     let params = ExecParams {
         command: command.into_iter().map(Into::into).collect(),
         cwd: cwd.clone(),
         expiration: 1000.into(),
         capture_policy: ExecCapturePolicy::ShellTool,
-        env: HashMap::new(),
+        env,
         network: None,
         network_environment_id: None,
         sandbox_permissions: SandboxPermissions::UseDefault,
@@ -132,12 +135,24 @@ async fn openpty_works_under_real_exec_seatbelt_path() {
         return;
     }
 
-    let python = match which::which("python3") {
-        Ok(path) => path,
-        Err(_) => {
+    let python = ["/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
+        .into_iter()
+        .map(Path::new)
+        .find(|candidate| candidate.exists())
+        .map(Path::to_path_buf)
+        .or_else(|| which::which("python3").ok());
+    let python = match python {
+        Some(path) => path,
+        None => {
             eprintln!("python3 not found in PATH, skipping test.");
             return;
         }
+    };
+    if python == Path::new("/usr/bin/python3")
+        || python == Path::new("/Applications/Xcode.app/Contents/Developer/usr/bin/python3")
+    {
+        eprintln!("only the Xcode python3 shim is available, skipping test.");
+        return;
     };
 
     let tmp = TempDir::new().expect("should be able to create temp dir");
