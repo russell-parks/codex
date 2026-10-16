@@ -1057,7 +1057,7 @@ async fn cli_main(
     interactive.daemon_cli_executable = daemon_cli_executable
         .clone()
         .and_then(|path| AbsolutePathBuf::from_absolute_path(path).ok());
-    reject_unsupported_worktree_for_subcommand(interactive.shared.worktree, &subcommand)?;
+    reject_unsupported_worktree_for_subcommand(interactive.shared.uses_worktree(), &subcommand)?;
     // Fold --enable/--disable into config overrides so they flow to all subcommands.
     let toggle_overrides = feature_toggles.to_overrides()?;
     root_config_overrides.raw_overrides.extend(toggle_overrides);
@@ -2184,14 +2184,16 @@ fn reject_unsupported_worktree_for_subcommand(
     subcommand: &Option<Subcommand>,
 ) -> anyhow::Result<()> {
     let subcommand_worktree = match subcommand {
-        Some(Subcommand::Exec(command)) => command.shared.worktree,
-        Some(Subcommand::Resume(command)) => command.config_overrides.0.shared.worktree,
-        Some(Subcommand::Fork(command)) => command.config_overrides.0.shared.worktree,
+        Some(Subcommand::Exec(command)) => command.shared.uses_worktree(),
+        Some(Subcommand::Resume(command)) => command.config_overrides.0.shared.uses_worktree(),
+        Some(Subcommand::Fork(command)) => command.config_overrides.0.shared.uses_worktree(),
         Some(Subcommand::Archive(command)) | Some(Subcommand::Unarchive(command)) => {
-            command.config_overrides.shared.worktree
+            command.config_overrides.shared.uses_worktree()
         }
-        Some(Subcommand::Delete(command)) => command.session.config_overrides.shared.worktree,
-        Some(Subcommand::Queue(command)) => command.config_overrides.shared.worktree,
+        Some(Subcommand::Delete(command)) => {
+            command.session.config_overrides.shared.uses_worktree()
+        }
+        Some(Subcommand::Queue(command)) => command.config_overrides.shared.uses_worktree(),
         _ => false,
     };
 

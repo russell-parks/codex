@@ -37,7 +37,7 @@ pub(super) async fn run_main_inner(
     #[cfg(not(windows))]
     let elevated_warning: Option<&str> = None;
     let strict_config = cli.strict_config;
-    if cli.shared.worktree {
+    if cli.shared.uses_worktree() {
         if explicit_remote_endpoint.is_some() {
             return Err(std::io::Error::other(
                 "`--worktree` is only supported for local sessions",
@@ -240,7 +240,7 @@ pub(super) async fn run_main_inner(
             EnvironmentManager::prepare_from_env().await
         }
         .map_err(std::io::Error::other)?;
-    if cli.shared.worktree
+    if cli.shared.uses_worktree()
         && (presentation_target.uses_remote_workspace()
             || prepared_environment_manager.default_environment_is_remote())
     {
@@ -477,7 +477,7 @@ pub(super) async fn run_main_inner(
             ))
             .await??
     };
-    let managed_worktree = if cli.shared.worktree {
+    let managed_worktree = if cli.shared.uses_worktree() {
         let (destination, bundle, worktree) = startup_draft
             .run_until(worktree_startup::prepare(
                 &mut cli,
