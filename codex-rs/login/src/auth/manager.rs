@@ -2721,7 +2721,7 @@ impl AuthManager {
             let generation = self.auth_change_state_tx.borrow().generation;
             let new_auth = self.load_auth().await;
             if let Some(publication) = self.publish_reloaded_auth(generation, new_auth) {
-                return publication.changed;
+                return publication.changed_for_refresh;
             }
             if self.inner.is_poisoned() {
                 return false;
