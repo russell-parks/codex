@@ -71,6 +71,7 @@ members = [
     "ext/history-notes",
     "ext/image-generation",
     "ext/items",
+    "ext/local-telemetry",
     "ext/memories",
     "ext/mcp",
     "ext/queue",
@@ -83,6 +84,7 @@ members = [
     "linux-sandbox",
     "lmstudio",
     "login",
+    "local-telemetry",
     "codex-mcp",
     "memories/read",
     "memories/write",
@@ -246,6 +248,8 @@ codex-keyring-store = { path = "keyring-store" }
 codex-linux-sandbox = { path = "linux-sandbox" }
 codex-lmstudio = { path = "lmstudio" }
 codex-login = { path = "login" }
+codex-local-telemetry = { path = "local-telemetry" }
+codex-local-telemetry-extension = { path = "ext/local-telemetry" }
 codex-mermaid = { path = "mermaid" }
 codex-message-history = { path = "message-history" }
 codex-memories-extension = { path = "ext/memories" }

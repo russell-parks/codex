@@ -314,6 +314,7 @@ use crate::shell;
 use crate::state::AcceptedUserInputResponse;
 use crate::state::AutoCompactWindowIds;
 use crate::state::AutoCompactWindowSnapshot;
+use crate::state::PendingApproval;
 use crate::state::PendingRequestPermissions;
 use crate::state::ReasoningEffortPin;
 use crate::state::SessionServices;
@@ -1229,6 +1230,11 @@ impl Session {
                 .app_server_client_version
                 .clone(),
         }
+    }
+
+    pub(crate) async fn cwd(&self) -> AbsolutePathBuf {
+        let state = self.state.lock().await;
+        state.session_configuration.cwd().clone()
     }
 
     fn managed_network_proxy_active_for_permission_profile(
@@ -2800,7 +2806,14 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(effective_approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        effective_approval_id.clone(),
+                        PendingApproval {
+                            tx_response: tx_approve,
+                            turn_id: turn_context.sub_id.clone(),
+                            approval_kind: "exec",
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2860,6 +2873,12 @@ impl Session {
             parsed_cmd,
         });
         self.send_event(turn_context, event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &effective_approval_id,
+            "exec",
+        );
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
@@ -2884,7 +2903,14 @@ impl Session {
             match active.as_mut() {
                 Some(at) => {
                     let mut ts = at.turn_state.lock().await;
-                    ts.insert_pending_approval(approval_id.clone(), tx_approve)
+                    ts.insert_pending_approval(
+                        approval_id.clone(),
+                        PendingApproval {
+                            tx_response: tx_approve,
+                            turn_id: turn_context.sub_id.clone(),
+                            approval_kind: "apply_patch",
+                        },
+                    )
                 }
                 None => None,
             }
@@ -2902,6 +2928,12 @@ impl Session {
             grant_root,
         });
         self.send_event(turn_context, event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &approval_id,
+            "apply_patch",
+        );
         rx_approve.await.unwrap_or(ReviewDecision::Abort)
     }
 
@@ -3067,6 +3099,12 @@ impl Session {
             cwd: Some(cwd.clone().into()),
         });
         self.send_event(turn_context.as_ref(), event).await;
+        crate::local_telemetry::record_approval_requested(
+            &self.services.thread_extension_data,
+            &turn_context.sub_id,
+            &call_id,
+            "request_permissions",
+        );
         tokio::select! {
             biased;
             _ = cancellation_token.cancelled() => {
@@ -3194,6 +3232,18 @@ impl Session {
                     &entry.environment.selection.environment_id,
                     &entry.turn_context,
                 );
+                crate::local_telemetry::record_approval_resolved(
+                    &self.services.thread_extension_data,
+                    &entry.turn_context.sub_id,
+                    call_id,
+                    "request_permissions",
+                    !response.permissions.is_empty(),
+                    if response.permissions.is_empty() {
+                        "denied"
+                    } else {
+                        "approved"
+                    },
+                );
                 entry.tx_response.send(response).ok();
             }
             None => {
@@ -3317,8 +3367,22 @@ impl Session {
             }
         };
         match entry {
-            Some(tx_approve) => {
-                tx_approve.send(decision).ok();
+            Some(entry) => {
+                let approved = !matches!(
+                    decision,
+                    ReviewDecision::Denied { .. }
+                        | ReviewDecision::TimedOut
+                        | ReviewDecision::Abort
+                );
+                crate::local_telemetry::record_approval_resolved(
+                    &self.services.thread_extension_data,
+                    &entry.turn_id,
+                    approval_id,
+                    entry.approval_kind,
+                    approved,
+                    decision.to_opaque_string(),
+                );
+                entry.tx_response.send(decision).ok();
             }
             None => {
                 warn!("No pending approval found for call_id: {approval_id}");
@@ -4878,6 +4942,13 @@ impl Session {
             let state = self.state.lock().await;
             state.token_info_and_rate_limits()
         };
+        if let Some(rate_limits) = rate_limits.as_ref() {
+            crate::local_telemetry::record_rate_limits(
+                &self.services.session_extension_data,
+                &turn_context.sub_id,
+                rate_limits,
+            );
+        }
         let event = EventMsg::TokenCount(TokenCountEvent { info, rate_limits });
         self.send_event(turn_context, event).await;
     }
@@ -4967,6 +5038,11 @@ impl Session {
         )
         .await;
         user_message_item.client_id = client_id;
+        crate::local_telemetry::record_user_prompt(
+            &self.services.session_extension_data,
+            &turn_context.sub_id,
+            &user_message_item.message(),
+        );
         let turn_item = TurnItem::UserMessage(user_message_item);
         self.emit_turn_item_started(turn_context, &turn_item).await;
         self.emit_turn_item_completed(turn_context, turn_item).await;
