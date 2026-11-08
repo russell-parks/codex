@@ -471,6 +471,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         .await;
     tool_contributor
         .on_tool_start(ToolStartInput {
+            serving_assessment: None,
             session_store: &harness.session_store,
             thread_store: &harness.thread_store,
             turn_store: &turn_store,
@@ -832,6 +833,7 @@ async fn capture_flags_disable_usage_tool_and_error_events() {
     let tool_name = ToolName::plain("exec_command");
     registry.tool_lifecycle_contributors()[0]
         .on_tool_start(ToolStartInput {
+            serving_assessment: None,
             session_store: &session_store,
             thread_store: &thread_store,
             turn_store: &turn_store,

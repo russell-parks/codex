@@ -2856,7 +2856,7 @@ impl AuthManager {
             let cached = self.auth_cached();
             let new_auth = self.try_load_managed_auth(cached.as_ref()).await?;
             if let Some(publication) = self.publish_reloaded_auth(generation, new_auth) {
-                return Ok(publication.changed);
+                return Ok(publication.changed_for_refresh);
             }
             if self.inner.is_poisoned() {
                 return Err(std::io::Error::other("credential cache is unavailable"));

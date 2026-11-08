@@ -321,6 +321,18 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::plan_type_summary;
+    use codex_protocol::account::PlanType;
+
+    #[test]
+    fn scientific_plan_types_have_stable_telemetry_names() {
+        assert_eq!(plan_type_summary(PlanType::Sci), "sci");
+        assert_eq!(plan_type_summary(PlanType::SciPlus), "sci_plus");
+    }
+}
+
 fn rate_limit_reached_type_summary(
     reached_type: codex_protocol::protocol::RateLimitReachedType,
 ) -> String {
