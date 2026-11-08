@@ -252,6 +252,7 @@ fn token_usage_info() -> TokenUsageInfo {
             total_tokens: 6,
             codex_rollout_budget_units: None,
         },
+        last_usage_includes_reasoning: None,
         model_context_window: Some(128_000),
     }
 }
@@ -504,6 +505,7 @@ async fn lifecycle_callbacks_update_summary_and_emit_events() {
         &harness.session_store,
         "turn-1",
         &codex_analytics::TurnProfile {
+            critical_path: codex_analytics::TurnCriticalPath::Disabled,
             before_first_sampling_ms: 10,
             sampling_ms: 20,
             compaction_ms: 0,

@@ -543,8 +543,7 @@ pub(super) struct AuthReloadContext<'a> {
     pub(super) thread_manager: &'a Arc<ThreadManager>,
     pub(super) config_manager: &'a ConfigManager,
     pub(super) outgoing: &'a OutgoingMessageSender,
-    pub(super) chatgpt_base_url: &'a str,
-    pub(super) http_client_factory: codex_http_client::HttpClientFactory,
+    pub(super) config: &'a Config,
 }
 
 async fn reload_auth_from_storage_if_idle(
@@ -569,11 +568,9 @@ async fn handle_auth_reload(context: AuthReloadContext<'_>, reason: &str) {
     info!(
         "auth reloaded from storage before {reason}; invalidated model transport caches for {invalidated_thread_count} tracked thread(s)"
     );
-    context.config_manager.replace_cloud_config_bundle_loader(
-        Arc::clone(context.auth_manager),
-        context.chatgpt_base_url.to_string(),
-        context.http_client_factory,
-    );
+    context
+        .config_manager
+        .update_managed_config_loader(Arc::clone(context.auth_manager), context.config);
     context
         .config_manager
         .sync_default_client_residency_requirement()
