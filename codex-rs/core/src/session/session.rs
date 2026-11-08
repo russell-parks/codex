@@ -1721,8 +1721,8 @@ impl Session {
             let workspace_routing =
                 thread_extension_data.get_or_init(|| config.workspace_routing_context());
             let loaded_agents_md = agents_md_manager.get_loaded().await;
-            let telemetry_thread_config = session_configuration
-                .thread_config_snapshot(environment_selections.to_vec());
+            let telemetry_thread_config =
+                session_configuration.thread_config_snapshot(environment_selections.to_vec());
             local_telemetry::initialize_session_extension_data(
                 local_telemetry::SessionTelemetryInit {
                     config: config.as_ref(),
