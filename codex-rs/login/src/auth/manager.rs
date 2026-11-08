@@ -1874,7 +1874,6 @@ impl AuthDotJson {
 }
 
 struct AuthReload {
-    changed: bool,
     changed_for_refresh: bool,
 }
 
@@ -2893,9 +2892,8 @@ impl AuthManager {
         }
         let changed_for_refresh =
             !Self::auths_equal_for_refresh(guard.auth.as_ref(), auth.as_ref());
-        let changed = self.set_cached_auth_locked(&mut guard, auth);
+        self.set_cached_auth_locked(&mut guard, auth);
         Some(AuthReload {
-            changed,
             changed_for_refresh,
         })
     }
