@@ -37,11 +37,11 @@ jobs:
         include:
           - runner: macos-15
             target: aarch64-apple-darwin
-            binaries: "codex codex-code-mode-host"
+            binaries: "codex codex-code-mode-host codex-exec-server"
             split_debuginfo: packed
           - runner: windows-2022
             target: x86_64-pc-windows-msvc
-            binaries: "codex codex-code-mode-host codex-command-runner codex-windows-sandbox-setup"
+            binaries: "codex codex-code-mode-host codex-exec-server codex-command-runner codex-windows-sandbox-setup"
             split_debuginfo: off
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
