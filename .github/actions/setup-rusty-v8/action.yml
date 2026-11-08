@@ -11,13 +11,13 @@ runs:
     - name: Configure rusty_v8 artifact overrides and verify checksums
       shell: bash
       env:
+        GH_TOKEN: ${{ github.token }}
         TARGET: ${{ inputs.target }}
       run: |
         set -euo pipefail
 
         version="$(python3 "${GITHUB_WORKSPACE}/.github/scripts/rusty_v8_bazel.py" resolved-v8-crate-version)"
         release_tag="rusty-v8-v${version}"
-        base_url="https://github.com/openai/codex/releases/download/${release_tag}"
         binding_dir="${RUNNER_TEMP}/rusty_v8"
 
         profile="ptrcomp_sandbox_release"
@@ -41,9 +41,39 @@ runs:
           checksum_command=(shasum -a 256 --check -)
         fi
 
+        download_release_asset() {
+          local asset_name="$1"
+          local destination="$2"
+          local temp_path="${destination}.tmp"
+          local asset_id
+          local attempt
+          local retry_delay
+
+          for attempt in $(seq 1 8); do
+            if asset_id="$(
+              gh api "repos/openai/codex/releases/tags/${release_tag}" \
+                --jq ".assets[] | select(.name == \"${asset_name}\") | .id"
+            )" && [[ -n "$asset_id" ]] && gh api \
+              -H "Accept: application/octet-stream" \
+              "repos/openai/codex/releases/assets/${asset_id}" > "$temp_path"; then
+              mv "$temp_path" "$destination"
+              return 0
+            fi
+
+            rm -f "$temp_path"
+            if [[ "$attempt" -eq 8 ]]; then
+              echo "Failed to download ${asset_name} after ${attempt} attempts" >&2
+              return 1
+            fi
+
+            retry_delay=$((attempt * 15))
+            echo "Download attempt ${attempt} for ${asset_name} failed; retrying in ${retry_delay}s" >&2
+            sleep "$retry_delay"
+          done
+        }
+
         mkdir -p "${binding_dir}"
-        curl --retry 8 --retry-all-errors --retry-delay 15 --retry-max-time 600 \
-          -fsSL "${base_url}/${checksums_name}" -o "${checksums_path}"
+        download_release_asset "$checksums_name" "$checksums_path"
         # Check the original manifest bytes even when either checksum file uses CRLF.
         expected_manifest_checksum="$(grep -F "  ${checksums_name}" "${trusted_checksums}" | cut -d ' ' -f 1)"
         actual_manifest_checksum="$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${checksums_path}")"
@@ -51,10 +81,8 @@ runs:
           echo "Checksum mismatch for ${checksums_name}: expected ${expected_manifest_checksum}, got ${actual_manifest_checksum}" >&2
           exit 1
         fi
-        curl --retry 8 --retry-all-errors --retry-delay 15 --retry-max-time 600 \
-          -fsSL "${base_url}/${archive_name}" -o "${archive_path}"
-        curl --retry 8 --retry-all-errors --retry-delay 15 --retry-max-time 600 \
-          -fsSL "${base_url}/${binding_name}" -o "${binding_path}"
+        download_release_asset "$archive_name" "$archive_path"
+        download_release_asset "$binding_name" "$binding_path"
 
         if [[ "$(wc -l < "${checksums_path}")" -ne 2 ]]; then
           echo "Expected exactly two checksums for ${TARGET} in ${checksums_path}" >&2
