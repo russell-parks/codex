@@ -49,11 +49,7 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
           persist-credentials: false
 
-      - uses: ./.github/actions/setup-ci
-        if: ${{ runner.os != 'Windows' }}
-
       - name: Configure CI build paths
-        if: ${{ runner.os == 'Windows' }}
         shell: bash
         run: |
           set -euo pipefail
@@ -64,21 +60,13 @@ jobs:
           )
           mkdir -p "${build_dirs[@]}"
           {
+            echo "CODEX_REPO_ROOT=$GITHUB_WORKSPACE"
             echo "CI_BUILD_ROOT=$ci_build_root"
             echo "CARGO_TARGET_DIR=$ci_build_root/cargo-target"
             echo "TEMP=$ci_build_root/tmp"
             echo "TMP=$ci_build_root/tmp"
             echo "CARGO_NET_GIT_FETCH_WITH_CLI=true"
           } >> "$GITHUB_ENV"
-
-      - name: Install DotSlash
-        if: ${{ runner.os == 'Windows' }}
-        uses: facebook/install-dotslash@1e4e7b3e07eaca387acb98f1d4720e0bee8dbb6a # v2
-
-      - name: Make DotSlash available in PATH
-        if: ${{ runner.os == 'Windows' }}
-        shell: pwsh
-        run: Copy-Item (Get-Command dotslash).Source -Destination "$env:LOCALAPPDATA\Microsoft\WindowsApps\dotslash.exe"
 
       - name: Enable Git long paths
         if: ${{ runner.os == 'Windows' }}
