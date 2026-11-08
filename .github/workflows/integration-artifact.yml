@@ -3,13 +3,13 @@ name: fork-release-artifact
 on:
   push:
     branches:
-      - release/fork-0.163.0
+      - release/fork-0.164.0
   workflow_dispatch:
     inputs:
       ref:
         description: "Branch, tag, or SHA to build"
         required: false
-        default: release/fork-0.163.0
+        default: release/fork-0.164.0
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build fork 0.163.0 - ${{ matrix.target }}
+    name: Build fork 0.164.0 - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     defaults:
       run:
@@ -28,7 +28,7 @@ jobs:
     env:
       CODEX_REPO_ROOT: ${{ github.workspace }}
       TARGET: ${{ matrix.target }}
-      ARTIFACT_NAME: codex-fork-0.163.0-${{ matrix.target }}
+      ARTIFACT_NAME: codex-fork-0.164.0-${{ matrix.target }}
       BINARIES: ${{ matrix.binaries }}
       CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: ${{ matrix.split_debuginfo }}
     strategy:
@@ -161,8 +161,8 @@ jobs:
 
           dist_dir = Path(os.environ["GITHUB_WORKSPACE"]) / "dist" / os.environ["TARGET"]
           metadata = {
-              "upstream_tag": "rust-v0.163.0",
-              "upstream_commit": "83086188ae0614bd882818ff1aa23f3194962012",
+              "upstream_tag": "rust-v0.164.0",
+              "upstream_commit": "6aaac694803004a63c6f393d153c96d22521a6b9",
               "fork_stack_source": "45c913777dc56e3360de023b62f820c89f64cb65",
               "artifact_name": os.environ["ARTIFACT_NAME"],
               "archive": f"codex-package-{os.environ['TARGET']}.tar.gz",

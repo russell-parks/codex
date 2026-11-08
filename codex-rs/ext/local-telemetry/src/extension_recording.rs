@@ -296,6 +296,8 @@ fn plan_type_summary(plan_type: codex_protocol::account::PlanType) -> String {
         codex_protocol::account::PlanType::Pro => String::from("pro"),
         codex_protocol::account::PlanType::ProMax => String::from("pro_max"),
         codex_protocol::account::PlanType::ProLite => String::from("pro_lite"),
+        codex_protocol::account::PlanType::Sci => String::from("sci"),
+        codex_protocol::account::PlanType::SciPlus => String::from("sci_plus"),
         codex_protocol::account::PlanType::Team => String::from("team"),
         codex_protocol::account::PlanType::SelfServeBusinessProLite => {
             String::from("self_serve_business_prolite")
